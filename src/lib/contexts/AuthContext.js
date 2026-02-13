@@ -6,7 +6,8 @@ import { signOut as firebaseSignOut, onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase/firebaseClient";
 
 const AuthContext = createContext({
-  user: null,
+  user: null, // server-side user JSON
+  firebaseUser: null, // actual Firebase User object
   loading: true,
   refreshUser: async () => {},
   signOut: async () => {},
@@ -14,54 +15,51 @@ const AuthContext = createContext({
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  const [firebaseUser, setFirebaseUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  // Fetch server-side user info
   const fetchUser = async () => {
     try {
       const res = await fetch("/api/auth/me", {
         credentials: "include",
       });
-
       if (!res.ok) throw new Error("Not authenticated");
-
       const data = await res.json();
       setUser(data.user);
     } catch {
       setUser(null);
-    } finally {
-      setLoading(false);
     }
   };
 
-  // Sync Firebase auth with server session
+  // Sync Firebase Auth with server session
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setLoading(true);
+      setFirebaseUser(fbUser || null);
 
       try {
-        // USER LOGGED OUT
-        if (!firebaseUser) {
+        if (!fbUser) {
           setUser(null);
           setLoading(false);
           return;
         }
 
-        // USER LOGGED IN
-        const token = await firebaseUser.getIdToken(true);
-
-        await fetch("/api/auth/session", {
+        // Create server session cookie
+        const token = await fbUser.getIdToken(true);
+        await fetch("/api/auth/signin", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token }),
         });
 
+        // Fetch server-side user info
         await fetchUser();
       } catch (err) {
         console.error("Auth sync error:", err);
         setUser(null);
+      } finally {
         setLoading(false);
       }
     });
@@ -73,31 +71,32 @@ export function AuthProvider({ children }) {
   const refreshUser = async () => {
     setLoading(true);
     await fetchUser();
+    setLoading(false);
   };
 
   // Logout
   const signOut = async () => {
     try {
-      // delete session cookie FIRST
+      // Delete session cookie first
       await fetch("/api/auth/signout", {
         method: "POST",
         credentials: "include",
       });
 
-      // then logout firebase
+      // Then sign out Firebase
       await firebaseSignOut(auth);
 
-      // listener will update state automatically
       router.push("/");
     } catch (err) {
       console.error("Sign out failed:", err);
     }
   };
-  // Context
+
   return (
     <AuthContext.Provider
       value={{
         user,
+        firebaseUser,
         loading,
         setUser,
         refreshUser,
