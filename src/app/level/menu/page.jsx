@@ -139,24 +139,24 @@ export default function LevelMenu({ mode }) {
 
   /* ---------------- RENDER ---------------- */
   if (loading)
-    return <p className="text-center text-xl py-8">Loading levels...</p>;
+    return <p className="text-center text-xl py-8 text-black">Loading levels...</p>;
 
   if (error)
     return (
-      <p className="text-center text-xl py-8 text-red-500">
+      <p className="text-center text-xl py-8 text-black">
         ⚠️ {error}
       </p>
     );
 
   return (
     <div className="w-full flex flex-col items-center overflow-x-hidden relative">
-      <h2 className="w-full text-center text-5xl font-semibold my-6">
+      <h2 className="w-full text-center text-5xl font-semibold my-6 text-black">
         {playMode ? "Play Levels" : "Edit Levels"}
       </h2>
 
       <input
         placeholder="Search by name, author, or keyword"
-        className="self-end mr-5 mb-8 w-1/4 min-w-[200px] h-10 px-4 text-lg rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+        className="self-end mr-5 mb-8 w-1/4 min-w-[200px] h-10 px-4 text-lg text-black placeholder-gray-500 rounded-full border border-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
@@ -166,7 +166,7 @@ export default function LevelMenu({ mode }) {
           <div className="w-[90%] overflow-x-auto">
             <table className="w-full border-separate border-spacing-y-3 text-lg table-fixed">
               <thead>
-                <tr>
+                <tr className="text-black">
                   <th className="w-1/3">Name</th>
                   <th className="w-1/3">Author</th>
                   <th className="w-1/6">Keywords</th>
@@ -181,29 +181,25 @@ export default function LevelMenu({ mode }) {
                     onClick={() => handleSelectLevel(id)}
                     className="cursor-pointer group"
                   >
-                    <td className="bg-white px-4 py-3 text-center shadow rounded-l-xl truncate group-hover:bg-gray-50">
+                    <td className="bg-white px-4 py-3 text-center text-black shadow rounded-l-xl truncate group-hover:bg-gray-100">
                       {lvl.name || "Untitled Level"}
                     </td>
 
-                    <td className="bg-white px-4 py-3 text-center shadow truncate group-hover:bg-gray-50">
+                    <td className="bg-white px-4 py-3 text-center text-black shadow truncate group-hover:bg-gray-100">
                       {lvl.author || "Unknown"}
                     </td>
 
-                    <td className="bg-white px-4 py-3 text-center shadow truncate group-hover:bg-gray-50">
+                    <td className="bg-white px-4 py-3 text-center text-black shadow truncate group-hover:bg-gray-100">
                       {Array.isArray(lvl.keywords)
                         ? lvl.keywords.join(", ")
                         : lvl.keywords || "None"}
                     </td>
 
                     {!playMode && (
-                      <td
-                        className={`bg-white px-4 py-3 text-center shadow rounded-r-xl truncate group-hover:bg-gray-50 ${
-                          lvl.isPublished
-                            ? "text-green-600"
-                            : "text-orange-500"
-                        }`}
-                      >
-                        {lvl.isPublished ? "✅" : "❌"}
+                      <td className="bg-white px-4 py-3 text-center shadow rounded-r-xl truncate group-hover:bg-gray-100">
+                        <span className={lvl.isPublished ? "text-green-600" : "text-orange-500"}>
+                          {lvl.isPublished ? "✅" : "❌"}
+                        </span>
                       </td>
                     )}
                   </tr>
@@ -212,12 +208,12 @@ export default function LevelMenu({ mode }) {
             </table>
           </div>
         ) : (
-          <p className="pt-[10vh] text-red-500 text-2xl text-center">
+          <p className="pt-[10vh] text-black text-2xl text-center">
             No levels match your search
           </p>
         )
       ) : (
-        <p className="pt-[10vh] text-red-500 text-2xl text-center">
+        <p className="pt-[10vh] text-black text-2xl text-center">
           {playMode ? "No published levels available" : "No levels found"}
         </p>
       )}
@@ -226,7 +222,7 @@ export default function LevelMenu({ mode }) {
       {showPinModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-2xl shadow-xl w-80">
-            <h3 className="text-xl font-semibold mb-4 text-center">
+            <h3 className="text-xl font-semibold mb-4 text-center text-black">
               Enter Editor PIN
             </h3>
 
@@ -235,7 +231,7 @@ export default function LevelMenu({ mode }) {
               value={pin}
               onChange={(e) => setPin(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleConfirmPin()}
-              className="w-full border px-3 py-2 rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="w-full border border-gray-400 px-3 py-2 rounded-lg mb-4 text-black placeholder-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Enter PIN"
               autoFocus
             />
@@ -247,7 +243,7 @@ export default function LevelMenu({ mode }) {
                   setPin("");
                   setSelectedLevelId(null);
                 }}
-                className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 transition"
+                className="px-4 py-2 rounded-lg bg-gray-200 text-black hover:bg-gray-300 transition"
               >
                 Cancel
               </button>

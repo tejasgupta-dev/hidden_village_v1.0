@@ -75,6 +75,8 @@ export async function POST(req) {
       levelIds: game.levelIds ?? [],
       storyline: game.storyline ?? [],
       requiresPin: storedPin !== "",
+      // Include PIN for anyone who has access (no PIN set, valid PIN entered, owner, or admin)
+      pin: storedPin,
     };
 
     return NextResponse.json({ success: true, data: structuredGame });

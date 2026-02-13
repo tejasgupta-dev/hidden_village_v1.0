@@ -98,7 +98,7 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
 
       try {
         const payload = {
-          gameId: game.id ?? null, // ✅ FIXED
+          gameId: game.id ?? null,
           enteredPin: isAdmin ? "" : sessionStorage.getItem("editorPin") || "",
           name: game.name,
           keywords: game.keywords,
@@ -155,8 +155,58 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     [game, router, user]
   );
 
+  // DELETE
+  const handleDelete = useCallback(async () => {
+    if (!game || !game.id) return;
+
+    const confirmed = confirm(
+      "Are you sure you want to delete this game? This action cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    const isAdmin = user?.roles?.includes("admin");
+
+    setSavingGame(true);
+
+    try {
+      const res = await fetch("/api/game/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: game.id,
+          pin: isAdmin ? "" : sessionStorage.getItem("editorPin") || "",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        alert(data.message || "Failed to delete game.");
+        return;
+      }
+
+      alert("Game deleted successfully!");
+      
+      if (!isAdmin) {
+        sessionStorage.removeItem("editorPin");
+      }
+      
+      router.replace("/game/edit/menu");
+    } catch (err) {
+      console.error("Error deleting game:", err);
+      alert("Unexpected error deleting game.");
+    } finally {
+      setSavingGame(false);
+    }
+  }, [game, router, user]);
+
+  // BACK
+  const handleBack = () => router.back();
+
   return {
     game,
+    setGame,
     loadingGame,
     savingGame,
     allAvailableLevels,
@@ -223,5 +273,7 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     getLevelData: (levelId) =>
       allAvailableLevels[levelId] || { name: "(loading…)" },
     handleSave,
+    handleDelete,
+    handleBack,
   };
 };

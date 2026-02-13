@@ -240,7 +240,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     router.replace("/level/menu");
   };
 
-  const handleBack = () => router.push("/level/menu");
+  const handleBack = () => router.back();
 
   return {
     level,
