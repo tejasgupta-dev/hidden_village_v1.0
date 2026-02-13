@@ -37,7 +37,7 @@ export default function LevelEditor() {
 
   if (loadingLevel)
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-transparent flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3"></div>
           <p className="text-gray-700 text-sm">Loading...</p>
@@ -48,7 +48,7 @@ export default function LevelEditor() {
   if (!level) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50 py-4 px-3">
+    <div className="min-h-screen bg-transparent py-4 px-3">
       <div className="max-w-3xl mx-auto">
         
         {/* HEADER */}
@@ -140,7 +140,7 @@ export default function LevelEditor() {
                   </button>
                   <button
                     onClick={() => setEditingPin(false)}
-                    className="p-1.5 bg-gray-300 text-gray-800 rounded hover:bg-gray-400"
+                    className="p-1.5 bg-transparent text-gray-800 rounded hover:bg-transparent"
                   >
                     <X size={16} />
                   </button>
@@ -151,7 +151,7 @@ export default function LevelEditor() {
                     setPinValue(level.pin || "");
                     setEditingPin(true);
                   }}
-                  className="px-3 py-1.5 bg-gray-100 border border-gray-400 text-gray-900 text-sm font-medium rounded hover:bg-gray-200"
+                  className="px-3 py-1.5 bg-transparent border border-gray-400 text-gray-900 text-sm font-medium rounded hover:bg-transparent-200"
                 >
                   {level.pin ? "Change PIN" : "Set PIN"}
                 </button>
@@ -277,7 +277,7 @@ export default function LevelEditor() {
             )}
 
             <button
-              className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-gray-50"
+              className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-transparent"
               onClick={handleBack}
             >
               Back
