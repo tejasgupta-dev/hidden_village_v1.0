@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/contexts/AuthContext";
 
 export const useLevelEditor = (levelId, isNew, userEmail) => {
   const router = useRouter();
+  const { user } = useAuth();
 
-  // -------------------
-  // Level state
-  // -------------------
   const [level, setLevel] = useState({
     id: null,
     author: userEmail ?? "",
@@ -21,19 +20,14 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     answers: [],
     isPublished: false,
     pin: "",
-    requiresPin: false,
   });
 
-  // -------------------
-  // UI state
-  // -------------------
   const [loadingLevel, setLoadingLevel] = useState(true);
   const [savingLevel, setSavingLevel] = useState(false);
   const [message, setMessage] = useState("");
 
-  // -------------------
-  // Load level
-  // -------------------
+  /* ================= LOAD ================= */
+
   useEffect(() => {
     if (isNew) {
       setLoadingLevel(false);
@@ -52,10 +46,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
       const res = await fetch("/api/level/get", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id,
-          pin: savedPin,
-        }),
+        body: JSON.stringify({ id, pin: savedPin }),
       });
 
       const data = await res.json();
@@ -66,9 +57,9 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         return;
       }
 
-      setLevel(data.data);
+      setLevel({ ...data.data, id });
     } catch (err) {
-      console.error("Error loading level:", err);
+      console.error(err);
       alert("Unexpected error loading level.");
       router.replace("/level/menu");
     } finally {
@@ -76,100 +67,119 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     }
   };
 
-  // -------------------
-  // Pose handlers
-  // -------------------
+  /* ================= POSES ================= */
+
   const addPose = () => {
-    const key = `pose${Date.now()}`;
-    setLevel((prev) => ({
+    const newKey = `pose_${Date.now()}`;
+
+    setLevel(prev => ({
       ...prev,
-      poses: { ...prev.poses, [key]: "" },
+      poses: {
+        ...(prev.poses || {}),
+        [newKey]: "",
+      },
     }));
   };
 
   const updatePose = (key, value) => {
-    setLevel((prev) => ({
+    setLevel(prev => ({
       ...prev,
-      poses: { ...prev.poses, [key]: value },
+      poses: {
+        ...prev.poses,
+        [key]: value,
+      },
     }));
   };
 
   const removePose = (key) => {
-    setLevel((prev) => {
-      const updated = { ...prev.poses };
-      delete updated[key];
-      return { ...prev, poses: updated };
+    setLevel(prev => {
+      const newPoses = { ...prev.poses };
+      delete newPoses[key];
+
+      return {
+        ...prev,
+        poses: newPoses,
+      };
     });
   };
 
-  // -------------------
-  // Options / Answers
-  // -------------------
+  /* ================= OPTIONS ================= */
+
   const addOption = () => {
-    setLevel((prev) => ({
+    setLevel(prev => ({
       ...prev,
-      options: [...prev.options, ""],
+      options: [...(prev.options || []), ""],
     }));
   };
 
   const updateOption = (index, value) => {
-    setLevel((prev) => {
-      const updated = [...prev.options];
-      updated[index] = value;
-      return { ...prev, options: updated };
+    setLevel(prev => {
+      const newOptions = [...prev.options];
+      newOptions[index] = value;
+
+      return {
+        ...prev,
+        options: newOptions,
+      };
     });
   };
 
   const removeOption = (index) => {
-    setLevel((prev) => {
-      const options = prev.options.filter((_, i) => i !== index);
-      const answers = prev.answers.filter((a) => a !== index);
-      return { ...prev, options, answers };
+    setLevel(prev => {
+      const newOptions = prev.options.filter((_, i) => i !== index);
+
+      const newAnswers = prev.answers
+        .filter(a => a !== index)
+        .map(a => (a > index ? a - 1 : a));
+
+      return {
+        ...prev,
+        options: newOptions,
+        answers: newAnswers,
+      };
     });
   };
 
   const toggleAnswer = (index) => {
-    setLevel((prev) => ({
-      ...prev,
-      answers: prev.answers.includes(index)
-        ? prev.answers.filter((a) => a !== index)
-        : [...prev.answers, index],
-    }));
+    setLevel(prev => {
+      const exists = prev.answers.includes(index);
+
+      return {
+        ...prev,
+        answers: exists
+          ? prev.answers.filter(a => a !== index)
+          : [...prev.answers, index],
+      };
+    });
   };
 
-  // -------------------
-  // Save
-  // -------------------
+  /* ================= SAVE ================= */
+
   const handleSave = useCallback(
     async (enteredPin, publish = false) => {
       if (!level) return;
-
-      // Require PIN if level already protected
-      if (level.id && level.requiresPin && !enteredPin) {
-        alert("PIN required.");
-        return;
-      }
 
       setSavingLevel(true);
       setMessage("");
 
       try {
+        const payload = {
+          id: level.id ?? null,
+          pin: level.pin ?? "",
+          name: level.name,
+          keywords: level.keywords,
+          poses: level.poses,
+          description: level.description,
+          question: level.question,
+          options: level.options,
+          answers: level.answers,
+          isPublished: publish,
+        };
+
         const res = await fetch("/api/level/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: level.id ?? null,
-            pin: enteredPin ?? "",
-            newPin: level.pin !== undefined ? level.pin : undefined, // FIXED
-            name: level.name,
-            keywords: level.keywords,
-            poses: level.poses,
-            description: level.description,
-            question: level.question,
-            options: level.options,
-            answers: level.answers,
-            isPublished: publish,
-          }),
+          body: JSON.stringify(payload),
         });
 
         const data = await res.json();
@@ -179,18 +189,14 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
           return;
         }
 
-        // Always update session pin after save
-        sessionStorage.setItem("editorPin", level.pin || "");
+        if (enteredPin) {
+          sessionStorage.setItem("editorPin", enteredPin);
+        }
 
-        // CREATE MODE
-        if (isNew && data.data?.levelId) {
+        if (!level.id && data.data?.levelId) {
           const newId = data.data.levelId;
 
-          alert(
-            publish
-              ? "Level created and published!"
-              : "Level created as draft!"
-          );
+          setLevel((prev) => ({ ...prev, id: newId }));
 
           router.replace(`/level/edit/${newId}`);
           return;
@@ -204,12 +210,11 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         setSavingLevel(false);
       }
     },
-    [level, isNew, router]
+    [level, router]
   );
 
-  // -------------------
-  // Delete
-  // -------------------
+  /* ================= DELETE ================= */
+
   const handleDelete = async () => {
     if (!window.confirm("Delete this level?")) return;
 
@@ -235,33 +240,21 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     router.replace("/level/menu");
   };
 
-  // -------------------
-  // Navigation
-  // -------------------
-  const handleBack = () => {
-    router.push("/level/menu");
-  };
+  const handleBack = () => router.push("/level/menu");
 
   return {
     level,
     setLevel,
-
     loadingLevel,
     savingLevel,
     message,
-
-    // Pose
     addPose,
     updatePose,
     removePose,
-
-    // Options
     addOption,
     updateOption,
     removeOption,
     toggleAnswer,
-
-    // Actions
     handleSave,
     handleDelete,
     handleBack,

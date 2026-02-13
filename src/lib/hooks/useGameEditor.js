@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/contexts/AuthContext";
 
 export const useGameEditor = (gameId, isNew, userEmail) => {
   const router = useRouter();
+  const { user } = useAuth();
 
-  // -------------------
-  // Game state
-  // -------------------
   const [game, setGame] = useState({
     id: null,
     name: "",
@@ -22,24 +21,15 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     requiresPin: false,
   });
 
-  // -------------------
-  // UI state
-  // -------------------
   const [loadingGame, setLoadingGame] = useState(true);
   const [savingGame, setSavingGame] = useState(false);
   const [allAvailableLevels, setAllAvailableLevels] = useState({});
   const [expandedLevel, setExpandedLevel] = useState(null);
   const [showAddLevel, setShowAddLevel] = useState(false);
 
-  // -------------------
-  // Inline editing
-  // -------------------
   const [editingField, setEditingField] = useState(null);
   const [editValue, setEditValue] = useState("");
 
-  // -------------------
-  // Load data
-  // -------------------
   useEffect(() => {
     loadAvailableLevels();
 
@@ -53,15 +43,11 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     }
   }, [gameId, isNew]);
 
-  // ✅ Now uses server API
   const loadAvailableLevels = async () => {
     try {
       const res = await fetch("/api/level/list");
       const data = await res.json();
-
-      if (res.ok && data.success) {
-        setAllAvailableLevels(data.data || {});
-      }
+      if (res.ok && data.success) setAllAvailableLevels(data.data || {});
     } catch (err) {
       console.error("Error loading levels:", err);
     }
@@ -71,15 +57,13 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     setLoadingGame(true);
 
     try {
-      const savedPin = sessionStorage.getItem("editorPin") || "";
+      const isAdmin = user?.roles?.includes("admin");
+      const savedPin = isAdmin ? "" : sessionStorage.getItem("editorPin") || "";
 
       const res = await fetch("/api/game/get", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id,
-          pin: savedPin,
-        }),
+        body: JSON.stringify({ id, pin: savedPin }),
       });
 
       const data = await res.json();
@@ -90,8 +74,8 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
         return;
       }
 
-      setGame(data.data);
-
+      // ensure id is stored
+      setGame({ ...data.data, id });
     } catch (err) {
       console.error("Error loading game:", err);
       alert("Unexpected error loading game.");
@@ -101,117 +85,35 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     }
   };
 
-  // -------------------
-  // Editing
-  // -------------------
-  const startEditing = useCallback((field, currentValue) => {
-    setEditingField(field);
-    setEditValue(currentValue || "");
-  }, []);
-
-  const saveEdit = useCallback(() => {
-    if (editingField) {
-      setGame((prev) => ({ ...prev, [editingField]: editValue }));
-      setEditingField(null);
-      setEditValue("");
-    }
-  }, [editingField, editValue]);
-
-  const cancelEdit = useCallback(() => {
-    setEditingField(null);
-    setEditValue("");
-  }, []);
-
-  // -------------------
-  // Level management
-  // -------------------
-  const addLevel = useCallback((levelId) => {
-    setGame((prev) => {
-      if (prev.levelIds.includes(levelId)) {
-        alert("Level already added!");
-        return prev;
-      }
-      return { ...prev, levelIds: [...prev.levelIds, levelId] };
-    });
-    setShowAddLevel(false);
-  }, []);
-
-  const removeLevel = useCallback((index) => {
-    if (!window.confirm("Remove this level from the game?")) return;
-
-    setGame((prev) => {
-      const levelIds = [...prev.levelIds];
-      const storyline = [...prev.storyline];
-
-      levelIds.splice(index, 1);
-      storyline.splice(index, 1);
-
-      return { ...prev, levelIds, storyline };
-    });
-  }, []);
-
-  const moveLevel = useCallback((index, direction) => {
-    setGame((prev) => {
-      const newIndex = index + direction;
-      if (newIndex < 0 || newIndex >= prev.levelIds.length) return prev;
-
-      const levelIds = [...prev.levelIds];
-      const storyline = [...prev.storyline];
-
-      [levelIds[index], levelIds[newIndex]] = [
-        levelIds[newIndex],
-        levelIds[index],
-      ];
-
-      [storyline[index], storyline[newIndex]] = [
-        storyline[newIndex],
-        storyline[index],
-      ];
-
-      return { ...prev, levelIds, storyline };
-    });
-  }, []);
-
-  const toggleExpandLevel = useCallback((levelId) => {
-    setExpandedLevel((prev) => (prev === levelId ? null : levelId));
-  }, []);
-
-  const getLevelData = useCallback(
-    (levelId) => allAvailableLevels[levelId] || { name: "(loading…)" },
-    [allAvailableLevels]
-  );
-
-  // -------------------
-  // Save
-  // -------------------
+  // =============================
+  // SAVE
+  // =============================
   const handleSave = useCallback(
-    async (enteredPin, isPublish = false) => {
+    async (isPublish = false) => {
       if (!game) return;
 
-      // If editing existing and requires PIN
-      if (game.id && game.requiresPin && !enteredPin) {
-        alert("PIN required.");
-        return;
-      }
+      const isAdmin = user?.roles?.includes("admin");
 
       setSavingGame(true);
 
       try {
-        const res = await fetch("/api/game/write", {
+        const payload = {
+          gameId: game.id ?? null, // ✅ FIXED
+          enteredPin: isAdmin ? "" : sessionStorage.getItem("editorPin") || "",
+          name: game.name,
+          keywords: game.keywords,
+          description: game.description,
+          levelIds: game.levelIds,
+          storyline: game.storyline,
+          settings: game.settings,
+          isPublished: isPublish,
+          newPin: game.pin,
+        };
+
+        const res = await fetch("/api/game/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: game.id ?? null,
-            pin: enteredPin ?? "",
-            name: game.name,
-            keywords: game.keywords,
-            description: game.description,
-            levelIds: game.levelIds,
-            storyline: game.storyline,
-            settings: game.settings,
-            isPublished: isPublish,
-            newPin: !game.id ? game.pin : undefined,
-          }),
+          body: JSON.stringify(payload),
         });
 
         const data = await res.json();
@@ -221,11 +123,15 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
           return;
         }
 
-        // CREATE MODE
-        if (isNew && data.data?.gameId) {
-          const newId = data.data.gameId;
+        // NEW GAME CREATED
+        if (!game.id && data.gameId) {
+          const newId = data.gameId;
 
-          sessionStorage.setItem("editorPin", game.pin || "");
+          setGame((prev) => ({ ...prev, id: newId }));
+
+          if (!isAdmin) {
+            sessionStorage.setItem("editorPin", game.pin || "");
+          }
 
           alert(
             isPublish
@@ -237,8 +143,8 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
           return;
         }
 
+        // UPDATE
         alert(isPublish ? "Game published!" : "Draft saved!");
-
       } catch (err) {
         console.error(err);
         alert("Unexpected error saving game.");
@@ -246,66 +152,76 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
         setSavingGame(false);
       }
     },
-    [game, isNew, router]
+    [game, router, user]
   );
-
-  // -------------------
-  // Delete
-  // -------------------
-  const handleDelete = async () => {
-    if (!window.confirm("Delete this game?")) return;
-
-    const savedPin = sessionStorage.getItem("editorPin") || "";
-
-    const res = await fetch("/api/game/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        gameId: game.id,
-        enteredPin: savedPin,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok || !data.success) {
-      alert(data.message || "Failed to delete game.");
-      return;
-    }
-
-    alert("Game deleted.");
-    router.replace("/game/edit/menu");
-  };
-
-  const handleBack = useCallback(() => {
-    router.push("/game/edit/menu");
-  }, [router]);
 
   return {
     game,
     loadingGame,
     savingGame,
     allAvailableLevels,
-
     expandedLevel,
     showAddLevel,
     setShowAddLevel,
-
     editingField,
     editValue,
     setEditValue,
-    startEditing,
-    saveEdit,
-    cancelEdit,
+    startEditing: (field, value) => {
+      setEditingField(field);
+      setEditValue(value || "");
+    },
+    saveEdit: () => {
+      if (editingField) {
+        setGame((prev) => ({ ...prev, [editingField]: editValue }));
+        setEditingField(null);
+        setEditValue("");
+      }
+    },
+    cancelEdit: () => {
+      setEditingField(null);
+      setEditValue("");
+    },
+    addLevel: (levelId) => {
+      setGame((prev) => {
+        if (prev.levelIds.includes(levelId)) return prev;
+        return { ...prev, levelIds: [...prev.levelIds, levelId] };
+      });
+      setShowAddLevel(false);
+    },
+    removeLevel: (index) => {
+      setGame((prev) => {
+        const levelIds = [...prev.levelIds];
+        const storyline = [...prev.storyline];
+        levelIds.splice(index, 1);
+        storyline.splice(index, 1);
+        return { ...prev, levelIds, storyline };
+      });
+    },
+    moveLevel: (index, direction) => {
+      setGame((prev) => {
+        const newIndex = index + direction;
+        if (newIndex < 0 || newIndex >= prev.levelIds.length) return prev;
 
-    addLevel,
-    removeLevel,
-    moveLevel,
-    toggleExpandLevel,
-    getLevelData,
+        const levelIds = [...prev.levelIds];
+        const storyline = [...prev.storyline];
 
+        [levelIds[index], levelIds[newIndex]] = [
+          levelIds[newIndex],
+          levelIds[index],
+        ];
+        [storyline[index], storyline[newIndex]] = [
+          storyline[newIndex],
+          storyline[index],
+        ];
+
+        return { ...prev, levelIds, storyline };
+      });
+    },
+    toggleExpandLevel: (levelId) => {
+      setExpandedLevel((prev) => (prev === levelId ? null : levelId));
+    },
+    getLevelData: (levelId) =>
+      allAvailableLevels[levelId] || { name: "(loading…)" },
     handleSave,
-    handleDelete,
-    handleBack,
   };
 };

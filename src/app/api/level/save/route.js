@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 
 export async function POST(req) {
   try {
+    // 🔐 Validate session
     const { success, user, response } = await requireSession(req);
     if (!success) return response;
 
@@ -20,6 +21,7 @@ export async function POST(req) {
       );
     }
 
+    // 🧾 Parse request body
     let body;
     try {
       body = await req.json();
@@ -33,7 +35,6 @@ export async function POST(req) {
     const {
       id,
       pin,
-      author,
       name,
       keywords,
       poses,
@@ -47,7 +48,13 @@ export async function POST(req) {
     const safeOptions = Array.isArray(options) ? options : [];
     const safeAnswers = Array.isArray(answers) ? answers : [];
 
-    // CREATE NEW LEVEL
+    const isAdmin =
+      Array.isArray(userRoles) && userRoles.includes("admin");
+
+    /* ============================================================
+       CREATE NEW LEVEL
+    ============================================================ */
+
     if (!id) {
       const newRef = db.ref("Level").push();
       const levelId = newRef.key;
@@ -76,7 +83,7 @@ export async function POST(req) {
           options: safeOptions,
           answers: safeAnswers,
           isPublished: isPublished ?? false,
-          pin: pin ?? "",
+          pin: typeof pin === "string" ? pin.trim() : "",
         },
       };
 
@@ -90,7 +97,10 @@ export async function POST(req) {
       });
     }
 
-    // UPDATE EXISTING LEVEL
+    /* ============================================================
+       UPDATE EXISTING LEVEL
+    ============================================================ */
+
     const snapshot = await db.ref(`Level/${id}`).get();
 
     if (!snapshot.exists()) {
@@ -106,16 +116,17 @@ export async function POST(req) {
     const enteredPin = String(pin ?? "").trim();
 
     const isOwner = level.authorUid === userUid;
-    const isAdmin =
-      Array.isArray(userRoles) && userRoles.includes("admin");
-
     const noPinSet = storedPin === "";
 
+    // 🔐 PIN validation
     if (!noPinSet) {
       const hasValidPin = storedPin === enteredPin;
-      const hasAccess = hasValidPin || isOwner || isAdmin;
 
-      if (!hasAccess) {
+      // Only block if:
+      // - Not correct pin
+      // - Not owner
+      // - Not admin
+      if (!hasValidPin && !isOwner && !isAdmin) {
         return NextResponse.json(
           { success: false, message: "Invalid PIN." },
           { status: 403 }
@@ -123,7 +134,7 @@ export async function POST(req) {
       }
     }
 
-    // VALIDATE PUBLISHED
+    // 📢 Validate publish requirements
     if (
       isPublished &&
       (!name ||
@@ -141,8 +152,9 @@ export async function POST(req) {
       );
     }
 
-    // allow owner/admin to change pin intentionally
+    // 🔁 Allow owner/admin to change pin
     let newPin = storedPin;
+
     if ((isOwner || isAdmin) && typeof pin === "string") {
       newPin = pin.trim();
     }

@@ -21,6 +21,7 @@ export async function POST(req) {
     }
 
     const body = await req.json();
+
     const {
       gameId,
       enteredPin,
@@ -31,14 +32,13 @@ export async function POST(req) {
       levelIds,
       storyline,
       settings,
-      isPublished
+      isPublished,
     } = body;
 
+    // ===============================
     // CREATE
+    // ===============================
     if (!gameId) {
-      // Allow empty PIN for new games
-      const pinToStore = newPin ?? "";
-
       const newRef = db.ref("Games").push();
       const newGameId = newRef.key;
 
@@ -50,10 +50,10 @@ export async function POST(req) {
         storyline: Array.isArray(storyline) ? storyline : [],
         settings: settings ?? {},
         isPublished: !!isPublished,
-        pin: pinToStore,
+        pin: newPin ?? "",
         author: userEmail,
         authorUid: userUid,
-        createdAt: Date.now()
+        createdAt: Date.now(),
       };
 
       await db.ref().update({
@@ -62,17 +62,19 @@ export async function POST(req) {
           name: gameData.name,
           keywords: gameData.keywords,
           isPublished: gameData.isPublished,
-          author: userEmail
-        }
+          author: userEmail,
+        },
       });
 
       return NextResponse.json({
         success: true,
-        gameId: newGameId
+        gameId: newGameId,
       });
     }
 
+    // ===============================
     // UPDATE
+    // ===============================
     const snapshot = await db.ref(`Games/${gameId}`).get();
 
     if (!snapshot.exists()) {
@@ -83,18 +85,14 @@ export async function POST(req) {
     }
 
     const game = snapshot.val();
-
     const isOwner = game.authorUid === userUid;
     const isAdmin = Array.isArray(userRoles) && userRoles.includes("admin");
 
     const storedPin = String(game.pin ?? "").trim();
     const enteredPinStr = String(enteredPin ?? "").trim();
-
-    // If no PIN is set, allow anyone to edit
     const noPinSet = storedPin === "";
-    
+
     if (!noPinSet) {
-      // PIN exists - validate it (or allow owner/admin to bypass)
       const hasValidPin = storedPin === enteredPinStr;
       const hasAccess = hasValidPin || isOwner || isAdmin;
 
@@ -105,27 +103,34 @@ export async function POST(req) {
         );
       }
     }
-    // If noPinSet === true, skip authorization
 
     const updates = {};
+
     if (name !== undefined) updates[`Games/${gameId}/name`] = name;
     if (keywords !== undefined) updates[`Games/${gameId}/keywords`] = keywords;
-    if (description !== undefined) updates[`Games/${gameId}/description`] = description;
-    if (Array.isArray(levelIds)) updates[`Games/${gameId}/levelIds`] = levelIds;
-    if (Array.isArray(storyline)) updates[`Games/${gameId}/storyline`] = storyline;
-    if (settings !== undefined) updates[`Games/${gameId}/settings`] = settings;
-    if (isPublished !== undefined) updates[`Games/${gameId}/isPublished`] = !!isPublished;
-    if (newPin !== undefined) updates[`Games/${gameId}/pin`] = newPin;
+    if (description !== undefined)
+      updates[`Games/${gameId}/description`] = description;
+    if (Array.isArray(levelIds))
+      updates[`Games/${gameId}/levelIds`] = levelIds;
+    if (Array.isArray(storyline))
+      updates[`Games/${gameId}/storyline`] = storyline;
+    if (settings !== undefined)
+      updates[`Games/${gameId}/settings`] = settings;
+    if (isPublished !== undefined)
+      updates[`Games/${gameId}/isPublished`] = !!isPublished;
+    if (newPin !== undefined)
+      updates[`Games/${gameId}/pin`] = newPin;
 
-    // Sync GameList
-    if (name !== undefined) updates[`GameList/${gameId}/name`] = name;
-    if (keywords !== undefined) updates[`GameList/${gameId}/keywords`] = keywords;
-    if (isPublished !== undefined) updates[`GameList/${gameId}/isPublished`] = !!isPublished;
+    if (name !== undefined)
+      updates[`GameList/${gameId}/name`] = name;
+    if (keywords !== undefined)
+      updates[`GameList/${gameId}/keywords`] = keywords;
+    if (isPublished !== undefined)
+      updates[`GameList/${gameId}/isPublished`] = !!isPublished;
 
     await db.ref().update(updates);
 
     return NextResponse.json({ success: true });
-
   } catch (error) {
     console.error("Save game error:", error);
     return NextResponse.json(

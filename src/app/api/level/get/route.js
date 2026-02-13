@@ -73,6 +73,7 @@ export async function POST(req) {
       options: Array.isArray(level.options) ? level.options : [],
       answers: Array.isArray(level.answers) ? level.answers : [],
       isPublished: level.isPublished ?? false,
+      pin: storedPin,
       requiresPin: storedPin !== "",
     };
 
