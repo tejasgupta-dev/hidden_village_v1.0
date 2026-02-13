@@ -15,6 +15,11 @@ export default function Home() {
     { label: "Settings", href: "/settings" },
   ];
 
+  // Add Admin Dashboard button if user is admin
+  if (user?.roles?.includes("admin")) {
+    buttons.push({ label: "Admin Dashboard", href: "/admin" });
+  }
+
   const authButton = user
     ? { label: "Sign Out", onClick: signOut, color: "red" }
     : { label: "Sign In", href: "/auth/signIn", color: "blue" };
