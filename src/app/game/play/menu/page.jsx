@@ -67,31 +67,31 @@ export default function GameMenu() {
   };
 
   if (loading)
-    return <p className="text-center text-xl py-8">Loading games...</p>;
+    return <p className="text-center text-xl py-8 text-black">Loading games...</p>;
 
   if (error)
     return (
-      <p className="text-center text-xl py-8 text-red-500">
+      <p className="text-center text-xl py-8 text-black">
         ⚠️ {error}
       </p>
     );
 
   if (Object.keys(games).length === 0)
     return (
-      <p className="pt-[10vh] text-red-500 text-2xl text-center">
+      <p className="pt-[10vh] text-black text-2xl text-center">
         No published games found
       </p>
     );
 
   return (
     <div className="w-full flex flex-col items-center overflow-x-hidden relative">
-      <h2 className="w-full text-center text-5xl font-semibold my-6">
+      <h2 className="w-full text-center text-5xl font-semibold my-6 text-black">
         Play Games
       </h2>
 
       <input
         placeholder="Search by name, author, or keyword"
-        className="self-end mr-5 mb-8 w-1/4 min-w-[200px] h-10 px-4 text-lg rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+        className="self-end mr-5 mb-8 w-1/4 min-w-[200px] h-10 px-4 text-lg text-black placeholder-gray-500 rounded-full border border-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
@@ -100,7 +100,7 @@ export default function GameMenu() {
         <div className="w-[90%] overflow-x-auto">
           <table className="w-full border-separate border-spacing-y-3 text-lg table-fixed">
             <thead>
-              <tr>
+              <tr className="text-black">
                 <th className="text-center font-semibold py-2 w-1/3">Name</th>
                 <th className="text-center font-semibold py-2 w-1/3">Author</th>
                 <th className="text-center font-semibold py-2 w-1/3">Keywords</th>
@@ -114,15 +114,15 @@ export default function GameMenu() {
                   onClick={() => handleSelectGame(id)}
                   className="cursor-pointer group"
                 >
-                  <td className="bg-white px-4 py-3 text-center shadow rounded-l-xl truncate group-hover:bg-gray-50">
+                  <td className="bg-white px-4 py-3 text-center text-black shadow rounded-l-xl truncate group-hover:bg-gray-100">
                     {game.name || "Untitled Game"}
                   </td>
 
-                  <td className="bg-white px-4 py-3 text-center shadow truncate group-hover:bg-gray-50">
+                  <td className="bg-white px-4 py-3 text-center text-black shadow truncate group-hover:bg-gray-100">
                     {game.author || "Unknown"}
                   </td>
 
-                  <td className="bg-white px-4 py-3 text-center shadow rounded-r-xl truncate group-hover:bg-gray-50">
+                  <td className="bg-white px-4 py-3 text-center text-black shadow rounded-r-xl truncate group-hover:bg-gray-100">
                     {Array.isArray(game.keywords)
                       ? game.keywords.join(", ")
                       : game.keywords || "None"}
@@ -133,7 +133,7 @@ export default function GameMenu() {
           </table>
         </div>
       ) : (
-        <p className="pt-[10vh] text-red-500 text-2xl text-center">
+        <p className="pt-[10vh] text-black text-2xl text-center">
           No games match your search
         </p>
       )}
