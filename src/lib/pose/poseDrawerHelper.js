@@ -1,4 +1,4 @@
-import { SEGMENT_ANGLE_LANDMARKS } from "./LandmarkUtils";
+import { SEGMENT_ANGLE_LANDMARKS } from "./landmark";
 
 /** @internal
  * @param {Object} firstPoint

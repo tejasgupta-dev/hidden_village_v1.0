@@ -3,8 +3,9 @@
 import { useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { Check, X, Plus, Trash2 } from "lucide-react";
+import { Check, X, Plus, Trash2, Camera, Play } from "lucide-react";
 import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
+import PoseCapture from "@/components/Pose/poseCapture";
 
 export default function LevelEditor() {
   const params = useParams();
@@ -33,6 +34,7 @@ export default function LevelEditor() {
 
   const [editingPin, setEditingPin] = useState(false);
   const [pinValue, setPinValue] = useState("");
+  const [showPoseCapture, setShowPoseCapture] = useState(false);
   const pinRef = useRef(null);
 
   if (loadingLevel)
@@ -49,7 +51,7 @@ export default function LevelEditor() {
 
   return (
     <div className="min-h-screen bg-transparent py-4 px-3">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         
         {/* HEADER */}
         <h1 className="text-2xl font-bold text-gray-900 text-center mb-1">
@@ -65,7 +67,7 @@ export default function LevelEditor() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           
           {/* LEFT COLUMN */}
           <div className="space-y-3">
@@ -151,25 +153,52 @@ export default function LevelEditor() {
                     setPinValue(level.pin || "");
                     setEditingPin(true);
                   }}
-                  className="px-3 py-1.5 bg-transparent border border-gray-400 text-gray-900 text-sm font-medium rounded hover:bg-transparent-200"
+                  className="px-3 py-1.5 bg-transparent border border-gray-400 text-gray-900 text-sm font-medium rounded hover:bg-gray-200"
                 >
                   {level.pin ? "Change PIN" : "Set PIN"}
                 </button>
               )}
             </div>
 
+            {/* QUESTION */}
+            <div className="bg-white rounded-lg border border-gray-300 p-4">
+              <h2 className="text-sm font-bold text-gray-900 mb-2">Question</h2>
+              <textarea
+                rows={3}
+                value={level.question}
+                onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
+                className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="Your question..."
+              />
+            </div>
+          </div>
+
+          {/* MIDDLE COLUMN */}
+          <div className="space-y-3">
+            
             {/* POSES */}
             <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-2">Poses</h2>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-bold text-gray-900">Poses</h2>
+                <button
+                  onClick={() => setShowPoseCapture(!showPoseCapture)}
+                  className="px-2 py-1 bg-purple-600 text-white text-xs rounded hover:bg-purple-700 flex items-center gap-1"
+                >
+                  <Camera size={12} />
+                  {showPoseCapture ? "Hide Camera" : "Capture"}
+                </button>
+              </div>
 
-              <div className="space-y-2 max-h-32 overflow-y-auto">
+              <div className="space-y-2 max-h-64 overflow-y-auto">
                 {Object.entries(level.poses || {}).map(([key, val]) => (
                   <div className="flex gap-2 items-center" key={key}>
                     <input
                       value={val}
                       onChange={(e) => updatePose(key, e.target.value)}
                       className="flex-1 border border-gray-400 rounded px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Pose..."
+                      placeholder="Pose name..."
+                      disabled
+                      title="Pose data is stored as JSON"
                     />
                     <button
                       className="p-1 bg-red-100 text-red-700 rounded hover:bg-red-600 hover:text-white"
@@ -181,29 +210,9 @@ export default function LevelEditor() {
                 ))}
               </div>
 
-              <button
-                className="mt-2 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center gap-1.5"
-                onClick={addPose}
-              >
-                <Plus size={14} />
-                Add Pose
-              </button>
-            </div>
-          </div>
-
-          {/* RIGHT COLUMN */}
-          <div className="space-y-3">
-            
-            {/* QUESTION */}
-            <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-2">Question</h2>
-              <textarea
-                rows={3}
-                value={level.question}
-                onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
-                className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                placeholder="Your question..."
-              />
+              <p className="text-xs text-gray-500 mt-2">
+                {Object.keys(level.poses || {}).length} pose(s) captured
+              </p>
             </div>
 
             {/* OPTIONS */}
@@ -245,6 +254,18 @@ export default function LevelEditor() {
               </button>
             </div>
           </div>
+
+          {/* RIGHT COLUMN - POSE CAPTURE */}
+          <div className="space-y-3">
+            {showPoseCapture && (
+              <PoseCapture
+                poses={level.poses || {}}
+                onPosesUpdate={(newPoses) => {
+                  setLevel((prev) => ({ ...prev, poses: newPoses }));
+                }}
+              />
+            )}
+          </div>
         </div>
 
         {/* ACTION BUTTONS */}
@@ -277,7 +298,7 @@ export default function LevelEditor() {
             )}
 
             <button
-              className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-transparent"
+              className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-gray-200"
               onClick={handleBack}
             >
               Back

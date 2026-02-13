@@ -1,10 +1,10 @@
-import { useCallback, forwardRef, useMemo } from "react";
-import { Stage, Container, Graphics } from "@pixi/react";
-import { FACEMESH_FACE_OVAL, POSE_LANDMARKS } from "@mediapipe/holistic/holistic";
+"use client";
+
+import { useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import { scale } from "chroma-js";
-import { blue, yellow, pink } from "../util/colors";
-import { LANDMARK_GROUPINGS } from "./LandmarkUtils";
-import { landmarkToCoordinates, objMap } from "./PoseDrawingUtils";
+import { blue, yellow, pink } from "../color";
+import { LANDMARK_GROUPINGS, FACEMESH_FACE_OVAL, POSE_LANDMARKS } from "./landmark";
+import { landmarkToCoordinates, objMap } from "./poseDrawerHelper";
 
 // Color configuration and scales for similarity scoring
 const COLORS = {
@@ -17,45 +17,63 @@ const COLORS = {
 };
 
 // Drawing configuration constants
-const LINE_STYLE = { width: 4, alpha: 1 };
+const LINE_WIDTH = 4;
 const DEFAULT_ARM_WIDTH = 15;
-const CIRCLE_RADIUS = 0.01;
+const CIRCLE_RADIUS = 2;
 
 // Utility function to calculate distance between two points
 const magnitude = (point1, point2) => (
   Math.sqrt((point1.x - point2.x) ** 2 + (point1.y - point2.y) ** 2)
 );
 
+// Convert hex color to CSS format
+const hexToCSS = (hex) => {
+  const r = (hex >> 16) & 0xFF;
+  const g = (hex >> 8) & 0xFF;
+  const b = hex & 0xFF;
+  return `rgb(${r}, ${g}, ${b})`;
+};
+
 // Get colors based on similarity scores for a given segment
 const getSegmentColors = (similarityScores, segmentName) => {
   if (!similarityScores?.length || !segmentName) {
-    return { fill: COLORS.fill, stroke: COLORS.stroke };
+    return { 
+      fill: hexToCSS(COLORS.fill), 
+      stroke: hexToCSS(COLORS.stroke) 
+    };
   }
 
   const score = similarityScores.find(s => s.segment === segmentName);
-  if (!score) return { fill: COLORS.fill, stroke: COLORS.stroke };
+  if (!score) return {
+    fill: hexToCSS(COLORS.fill),
+    stroke: hexToCSS(COLORS.stroke)
+  };
 
   return {
-    fill: parseInt(COLORS.scales.fill(score.similarityScore).hex().substring(1), 16),
-    stroke: parseInt(COLORS.scales.stroke(score.similarityScore).hex().substring(1), 16)
+    fill: COLORS.scales.fill(score.similarityScore).hex(),
+    stroke: COLORS.scales.stroke(score.similarityScore).hex()
   };
 };
 
 // Draw a connected path with the given landmarks
-const drawPath = (g, landmarks, width, height, segmentName = '', similarityScores = [], shouldClose = true) => {
+const drawPath = (ctx, landmarks, width, height, segmentName = '', similarityScores = [], shouldClose = true) => {
   if (!landmarks?.length || landmarks.some(l => l.x > width || l.y > height)) return;
 
   const { fill, stroke } = getSegmentColors(similarityScores, segmentName);
   const [first, ...rest] = landmarks;
 
-  g.beginFill(fill);
-  g.lineStyle(LINE_STYLE.width, stroke, LINE_STYLE.alpha);
-  g.moveTo(first.x, first.y);
+  ctx.beginPath();
+  ctx.moveTo(first.x, first.y);
   
-  rest.forEach(coord => g.lineTo(coord.x, coord.y));
-  if (shouldClose) g.lineTo(first.x, first.y);
+  rest.forEach(coord => ctx.lineTo(coord.x, coord.y));
+  if (shouldClose) ctx.lineTo(first.x, first.y);
   
-  g.endFill();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = LINE_WIDTH;
+  ctx.stroke();
 };
 
 // Calculate arm width based on shoulder to solar plexus distance
@@ -75,27 +93,28 @@ const calculateArmWidth = (poseData, width, height) => {
 
 // Drawing functions for different body parts
 const drawingFunctions = {
-  torso: (poseData, g, { width, height, similarityScores }) => {
+  torso: (poseData, ctx, { width, height, similarityScores }) => {
     const torsoCoords = objMap(
       LANDMARK_GROUPINGS.TORSO_LANDMARKS,
       landmarkToCoordinates(poseData.poseLandmarks, width, height)
     );
-    drawPath(g, Object.values(torsoCoords), width, height, 'TORSO', similarityScores);
+    drawPath(ctx, Object.values(torsoCoords), width, height, 'TORSO', similarityScores);
   },
 
-  abdomen: (poseData, g, { width, height }) => {
+  abdomen: (poseData, ctx, { width, height }) => {
     const abdomenCoords = objMap(
       LANDMARK_GROUPINGS.ABDOMEN_LANDMARKS,
       landmarkToCoordinates(poseData.poseLandmarks, width, height)
     );
     const radius = magnitude(abdomenCoords.PELVIS, abdomenCoords.LEFT_HIP);
     
-    g.beginFill(COLORS.fill);
-    g.drawCircle(abdomenCoords.PELVIS.x, abdomenCoords.PELVIS.y, radius);
-    g.endFill();
+    ctx.beginPath();
+    ctx.arc(abdomenCoords.PELVIS.x, abdomenCoords.PELVIS.y, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = hexToCSS(COLORS.fill);
+    ctx.fill();
   },
 
-  biceps: (poseData, g, { armWidth, width, height, similarityScores }) => {
+  biceps: (poseData, ctx, { armWidth, width, height, similarityScores }) => {
     const coords = objMap(
       LANDMARK_GROUPINGS.BICEP_LANDMARKS,
       landmarkToCoordinates(poseData.poseLandmarks, width, height)
@@ -109,11 +128,11 @@ const drawingFunctions = {
         { x: shoulder.x - armWidth, y: shoulder.y - armWidth },
         elbow
       ];
-      drawPath(g, bicepCoords, width, height, `${side}_BICEP`, similarityScores);
+      drawPath(ctx, bicepCoords, width, height, `${side}_BICEP`, similarityScores);
     });
   },
 
-  forearms: (poseData, g, { armWidth, width, height, similarityScores }) => {
+  forearms: (poseData, ctx, { armWidth, width, height, similarityScores }) => {
     const coords = objMap(
       LANDMARK_GROUPINGS.FOREARM_LANDMARKS,
       landmarkToCoordinates(poseData.poseLandmarks, width, height)
@@ -134,18 +153,18 @@ const drawingFunctions = {
         { x: elbow.x - armWidth, y: elbow.y - armWidth },
         wrist
       ];
-      drawPath(g, forearmCoords, width, height, `${side}_FOREARM`, similarityScores);
+      drawPath(ctx, forearmCoords, width, height, `${side}_FOREARM`, similarityScores);
     });
   },
 
-  thighs: (poseData, g, { armWidth, width, height, similarityScores }) => {
+  thighs: (poseData, ctx, { armWidth, width, height, similarityScores }) => {
     const coords = objMap(
       LANDMARK_GROUPINGS.THIGH_LANDMARKS,
       landmarkToCoordinates(poseData.poseLandmarks, width, height)
     );
 
     ['RIGHT', 'LEFT'].forEach(side => {
-      if (coords[`${side}_KNEE`].visibility <= 0.6) return;
+      if (coords[`${side}_KNEE`]?.visibility <= 0.6) return;
 
       const hip = coords[`${side}_HIP`];
       const knee = coords[`${side}_KNEE`];
@@ -158,18 +177,18 @@ const drawingFunctions = {
         { x: hip.x - armWidth, y: hip.y + magnitude1 - armWidth },
         { x: knee.x - armWidth, y: knee.y - magnitude1 - armWidth }
       ];
-      drawPath(g, thighCoords, width, height, `${side}_THIGH`, similarityScores);
+      drawPath(ctx, thighCoords, width, height, `${side}_THIGH`, similarityScores);
     });
   },
 
-  shins: (poseData, g, { armWidth, width, height, similarityScores }) => {
+  shins: (poseData, ctx, { armWidth, width, height, similarityScores }) => {
     const coords = objMap(
       LANDMARK_GROUPINGS.SHIN_LANDMARKS,
       landmarkToCoordinates(poseData.poseLandmarks, width, height)
     );
 
     ['RIGHT', 'LEFT'].forEach(side => {
-      if (coords[`${side}_KNEE`].visibility <= 0.6) return;
+      if (coords[`${side}_KNEE`]?.visibility <= 0.6) return;
 
       const knee = coords[`${side}_KNEE`];
       const ankle = coords[`${side}_ANKLE`];
@@ -178,34 +197,37 @@ const drawingFunctions = {
         { x: knee.x - armWidth, y: knee.y - armWidth },
         ankle
       ];
-      drawPath(g, shinCoords, width, height, `${side}_SHIN`, similarityScores);
+      drawPath(ctx, shinCoords, width, height, `${side}_SHIN`, similarityScores);
     });
   },
 
-  face: (poseData, g, { width, height, similarityScores }) => {
+  face: (poseData, ctx, { width, height, similarityScores }) => {
+    if (!poseData.faceLandmarks) return;
+
     // Draw face oval
     const faceOvalCoords = FACEMESH_FACE_OVAL.map(([index]) => {
       const coords = poseData.faceLandmarks[index];
       return { x: coords.x * width, y: coords.y * height };
     });
-    drawPath(g, faceOvalCoords, width, height, 'FACE', similarityScores);
+    drawPath(ctx, faceOvalCoords, width, height, 'FACE', similarityScores);
 
     // Draw individual landmarks
-    g.beginFill(COLORS.fill);
-    g.lineStyle(LINE_STYLE.width, COLORS.stroke, LINE_STYLE.alpha);
+    ctx.fillStyle = hexToCSS(COLORS.fill);
+    ctx.strokeStyle = hexToCSS(COLORS.stroke);
+    ctx.lineWidth = LINE_WIDTH;
 
     poseData.faceLandmarks.forEach(landmark => {
       const x = landmark.x * width;
       const y = landmark.y * height;
       if (x <= width && y <= height) {
-        g.drawCircle(x, y, CIRCLE_RADIUS);
+        ctx.beginPath();
+        ctx.arc(x, y, CIRCLE_RADIUS, 0, 2 * Math.PI);
+        ctx.fill();
       }
     });
-
-    g.endFill();
   },
 
-  hands: (poseData, g, { width, height, similarityScores }) => {
+  hands: (poseData, ctx, { width, height, similarityScores }) => {
     ['right', 'left'].forEach(side => {
       const handData = poseData[`${side}HandLandmarks`];
       if (!handData) return;
@@ -215,7 +237,7 @@ const drawingFunctions = {
         LANDMARK_GROUPINGS.PALM_LANDMARKS,
         landmarkToCoordinates(handData, width, height)
       );
-      drawPath(g, Object.values(palmCoords), width, height, `${side.toUpperCase()}_PALM`, similarityScores);
+      drawPath(ctx, Object.values(palmCoords), width, height, `${side.toUpperCase()}_PALM`, similarityScores);
 
       // Draw fingers
       const fingerGroups = [
@@ -231,7 +253,7 @@ const drawingFunctions = {
           group,
           landmarkToCoordinates(handData, width, height)
         );
-        drawPath(g, Object.values(fingerCoords), width, height, '', similarityScores, false);
+        drawPath(ctx, Object.values(fingerCoords), width, height, '', similarityScores, false);
       });
     });
   }
@@ -243,21 +265,32 @@ const PoseDrawer = forwardRef(({
   height = 480, 
   similarityScores = [] 
 }, ref) => {
-  const draw = useCallback((g) => {
+  const canvasRef = useRef(null);
+
+  useImperativeHandle(ref, () => canvasRef.current);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
     if (!poseData) {
       console.log('No pose data available');
       return;
     }
-    
-    g.clear();
-    
+
     const params = {
       armWidth: calculateArmWidth(poseData, width, height),
       width,
       height,
       similarityScores
     };
-    
+
     // Draw body parts in specific order for proper layering
     if (poseData.poseLandmarks) {
       [
@@ -267,31 +300,23 @@ const PoseDrawer = forwardRef(({
         'forearms',
         'thighs',
         'shins'
-      ].forEach(part => drawingFunctions[part](poseData, g, params));
-    }
-    
-    if (poseData.faceLandmarks) {
-      drawingFunctions.face(poseData, g, params);
+      ].forEach(part => drawingFunctions[part](poseData, ctx, params));
     }
 
-    drawingFunctions.hands(poseData, g, params);
+    if (poseData.faceLandmarks) {
+      drawingFunctions.face(poseData, ctx, params);
+    }
+
+    drawingFunctions.hands(poseData, ctx, params);
   }, [poseData, width, height, similarityScores]);
 
-  {/* Pixi.js options */}
-  const stageOptions = useMemo(() => ({
-    backgroundColor: 0xffffff,
-    backgroundAlpha: 0,
-    resolution: window.devicePixelRatio || 1,
-    antialias: true,
-    autoDensity: true
-  }), []);
-
   return (
-    <Stage width={width} height={height} options={stageOptions}>
-      <Container ref={ref}>
-        <Graphics draw={draw} />
-      </Container>
-    </Stage>
+    <canvas
+      ref={canvasRef}
+      width={width}
+      height={height}
+      style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
+    />
   );
 });
 
