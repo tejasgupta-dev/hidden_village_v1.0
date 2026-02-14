@@ -14,7 +14,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     async function fetchUsers() {
       try {
-        const res = await fetch("/api/admin/users");
+        const res = await fetch("/api/users");
         const data = await res.json();
 
         if (!data.success) {
@@ -42,7 +42,7 @@ export default function AdminDashboard() {
       setMsg("");
       setError("");
 
-      const res = await fetch(`/api/admin/users/${uid}`, {
+      const res = await fetch(`/api/users/${uid}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }), // "promote" | "demote"
@@ -96,7 +96,7 @@ export default function AdminDashboard() {
       setMsg("");
       setError("");
 
-      const res = await fetch(`/api/admin/users/${uid}`, {
+      const res = await fetch(`/api/users/${uid}`, {
         method: "DELETE",
       });
 
