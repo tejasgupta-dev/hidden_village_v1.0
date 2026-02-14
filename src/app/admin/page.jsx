@@ -1,111 +1,175 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
-  const router = useRouter();
+  const [error, setError] = useState("");
 
-  // Fetch all users
+  // ================================
+  // Fetch Users
+  // ================================
   useEffect(() => {
     async function fetchUsers() {
       try {
-        const res = await fetch("/api/admin/list-users");
+        const res = await fetch("/api/admin/users");
         const data = await res.json();
+
+        if (!data.success) {
+          setError(data.message || "Failed to fetch users");
+          return;
+        }
+
         setUsers(data.users || []);
       } catch (err) {
         console.error("Error fetching users:", err);
+        setError("Server error while loading users.");
       } finally {
         setLoading(false);
       }
     }
+
     fetchUsers();
   }, []);
 
-  // Promote user
-  const promoteUser = async (uid) => {
+  // ================================
+  // Promote / Demote
+  // ================================
+  const updateRole = async (uid, action) => {
     try {
-      const res = await fetch("/api/admin/promote", {
-        method: "POST",
+      setMsg("");
+      setError("");
+
+      const res = await fetch(`/api/admin/users/${uid}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid }),
+        body: JSON.stringify({ action }), // "promote" | "demote"
       });
+
       const data = await res.json();
+
+      if (!data.success) {
+        setError(data.message || "Action failed.");
+        return;
+      }
+
       setMsg(data.message);
 
-      // Refresh users list
+      // Update UI locally
       setUsers((prev) =>
-        prev.map((u) =>
-          u.uid === uid ? { ...u, roles: [...(u.roles || []), "admin"] } : u
-        )
+        prev.map((u) => {
+          if (u.uid !== uid) return u;
+
+          if (action === "promote") {
+            return {
+              ...u,
+              roles: [...new Set([...(u.roles || []), "admin"])],
+            };
+          }
+
+          if (action === "demote") {
+            return {
+              ...u,
+              roles: (u.roles || []).filter((r) => r !== "admin"),
+            };
+          }
+
+          return u;
+        })
       );
     } catch (err) {
       console.error(err);
-      setMsg("Promotion failed");
+      setError("Server error.");
     }
   };
 
-  // Demote user
-  const demoteUser = async (uid) => {
-    if (!confirm("Are you sure you want to revoke admin rights for this user?")) return;
+  // ================================
+  // Delete User
+  // ================================
+  const deleteUser = async (uid) => {
+    if (!confirm("Are you sure you want to permanently delete this user?"))
+      return;
 
     try {
-      const res = await fetch("/api/admin/demote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid }),
+      setMsg("");
+      setError("");
+
+      const res = await fetch(`/api/admin/users/${uid}`, {
+        method: "DELETE",
       });
+
       const data = await res.json();
+
+      if (!data.success) {
+        setError(data.message || "Delete failed.");
+        return;
+      }
+
       setMsg(data.message);
 
-      // Refresh users list
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.uid === uid
-            ? { ...u, roles: (u.roles || []).filter((r) => r !== "admin") }
-            : u
-        )
-      );
+      // Remove from UI
+      setUsers((prev) => prev.filter((u) => u.uid !== uid));
     } catch (err) {
       console.error(err);
-      setMsg("Demotion failed");
+      setError("Server error.");
     }
   };
 
-  if (loading) return <p>Loading...</p>;
+  // ================================
+  // UI
+  // ================================
+  if (loading) return <p className="p-8">Loading users...</p>;
 
   return (
-    <div className="p-8">
-      <h2 className="text-2xl font-bold mb-4">Admin Dashboard</h2>
-      {msg && <p className="text-green-600 mb-4">{msg}</p>}
+    <div className="p-8 max-w-4xl mx-auto">
+      <h2 className="text-2xl font-bold mb-6">Admin Dashboard</h2>
 
-      <ul>
+      {msg && <p className="text-green-600 mb-4">{msg}</p>}
+      {error && <p className="text-red-600 mb-4">{error}</p>}
+
+      <ul className="space-y-3">
         {users.map((u) => (
           <li
             key={u.uid}
-            className="flex justify-between items-center p-2 border rounded mb-2"
+            className="flex justify-between items-center p-4 border rounded-lg shadow-sm"
           >
-            <span>{u.email} ({u.roles?.join(", ") || "user"})</span>
+            <div>
+              <p className="font-medium">{u.email || "No Email"}</p>
+              <p className="text-sm text-gray-500">
+                Roles: {u.roles?.length ? u.roles.join(", ") : "user"}
+              </p>
+              {u.disabled && (
+                <p className="text-xs text-red-500">Account Disabled</p>
+              )}
+            </div>
+
             <div className="flex gap-2">
               {!u.roles?.includes("admin") && (
                 <button
-                  onClick={() => promoteUser(u.uid)}
-                  className="bg-blue-500 text-white px-3 py-1 rounded"
+                  onClick={() => updateRole(u.uid, "promote")}
+                  className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded"
                 >
-                  Promote to Admin
+                  Promote
                 </button>
               )}
+
               {u.roles?.includes("admin") && (
                 <button
-                  onClick={() => demoteUser(u.uid)}
-                  className="bg-red-500 text-white px-3 py-1 rounded"
+                  onClick={() => updateRole(u.uid, "demote")}
+                  className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded"
                 >
-                  Demote Admin
+                  Demote
                 </button>
               )}
+
+              <button
+                onClick={() => deleteUser(u.uid)}
+                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded"
+              >
+                Delete
+              </button>
             </div>
           </li>
         ))}

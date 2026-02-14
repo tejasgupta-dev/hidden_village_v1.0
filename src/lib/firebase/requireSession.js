@@ -59,12 +59,9 @@ export async function requireSession() {
  */
 export async function requireAdmin() {
   const { success, user, response } = await requireSession();
-
   if (!success) return { success, response };
 
-  const roles = user.customClaims?.roles || user.roles || [];
-  
-  if (!roles.includes("admin")) {
+  if (!user.roles || !user.roles.includes("admin")) {
     return {
       success: false,
       response: NextResponse.json(
