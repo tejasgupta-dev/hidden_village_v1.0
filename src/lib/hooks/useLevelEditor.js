@@ -151,13 +151,14 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
 
   const toggleAnswer = (index) => {
     setLevel((prev) => {
-      const exists = prev.answers.includes(index);
+      const currentAnswers = prev.answers || [];
+      const exists = currentAnswers.includes(index);
 
       return {
         ...prev,
         answers: exists
-          ? prev.answers.filter((a) => a !== index)
-          : [...prev.answers, index],
+          ? currentAnswers.filter((a) => a !== index)
+          : [...currentAnswers, index],
       };
     });
   };

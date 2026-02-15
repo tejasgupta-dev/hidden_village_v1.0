@@ -1,114 +1,121 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/firebase/firebaseAdmin";
-import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
+import { requireSession } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
+/*
+Modes supported:
+
+1. Preview mode (no pin required)
+2. Access mode (pin provided)
+3. Update mode (owner/admin/pin)
+4. Delete mode (owner/admin/pin)
+*/
+
+
 /* ===============================
-   GET – Get Level (PIN protected)
+   Helper: check admin
+================================ */
+function isAdmin(user) {
+  return (
+    user?.roles?.includes("admin") ||
+    user?.customClaims?.roles?.includes("admin")
+  );
+}
+
+
+/* ===============================
+   GET – Preview or Access Level
 ================================ */
 export async function GET(req, context) {
-  // Require login
-  const { success, user, response } = await requireSession();
-  if (!success) return response;
-
   try {
-    const { id } = await context.params;
+    const id = await context?.params?.id;
 
     if (!id) {
       return NextResponse.json(
-        { success: false, message: "Level ID required." },
+        { success: false, message: "Level ID required" },
         { status: 400 }
       );
     }
 
-    const ref = db.ref(`level/${id}`);
-    const snapshot = await ref.get();
+    const levelSnap = await db.ref(`level/${id}`).get();
 
-    if (!snapshot.exists()) {
+    if (!levelSnap.exists()) {
       return NextResponse.json(
-        { success: false, message: "Level not found." },
+        { success: false, message: "Level not found" },
         { status: 404 }
       );
     }
 
-    const level = snapshot.val();
+    const level = levelSnap.val();
 
-    // Check if PIN is required
-    const pinRequired = level.pin && level.pin.length > 0;
+    const hasPin =
+      typeof level.pin === "string" &&
+      level.pin.length > 0;
 
-    // Admins bypass PIN check
-    if (pinRequired && !isAdmin(user)) {
-      // Get pin from header or query
-      const headerPin = req.headers.get("x-level-pin");
-      const url = new URL(req.url);
-      const queryPin = url.searchParams.get("pin");
-      const providedPin = headerPin || queryPin;
+    const providedPin = req.headers.get("x-level-pin");
 
-      if (!providedPin) {
-        console.log(`🔒 PIN required for level ${id}, none provided`);
-        return NextResponse.json(
-          {
-            success: false,
-            code: "PIN_REQUIRED",
-            message: "PIN required to access this level.",
-          },
-          { status: 403 }
-        );
-      }
-
-      if (providedPin !== level.pin) {
-        console.log(`❌ Invalid PIN attempt for level ${id}`);
-        return NextResponse.json(
-          {
-            success: false,
-            code: "INVALID_PIN",
-            message: "Invalid PIN provided.",
-          },
-          { status: 403 }
-        );
-      }
-
-      console.log(`✅ Valid PIN provided for level ${id}`);
-    } else if (isAdmin(user)) {
-      console.log(`👑 Admin ${user.email} bypassed PIN for level ${id}`);
+    // Preview mode
+    if (!providedPin) {
+      return NextResponse.json({
+        success: true,
+        preview: true,
+        hasPin,
+      });
     }
 
-    // Hide pin from frontend
+    // Incorrect PIN
+    if (hasPin && providedPin !== level.pin) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Incorrect PIN",
+          hasPin: true,
+        },
+        { status: 403 }
+      );
+    }
+
+    // Access granted
     const { pin, ...safeLevel } = level;
 
     return NextResponse.json({
       success: true,
+      preview: false,
+      hasPin,
       level: {
         id,
         ...safeLevel,
       },
     });
+
   } catch (err) {
-    console.error("❌ GET /levels/[id] error:", err);
+    console.error("GET level error:", err);
+
     return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to fetch level.",
-      },
+      { success: false, message: err.message },
       { status: 500 }
     );
   }
 }
 
+
 /* ===============================
-   PATCH/PUT – Update Level
+   PATCH – Update Level
 ================================ */
 export async function PATCH(req, context) {
-  const { success, user, response } = await requireSession();
+
+  const { success, user, response } = await requireSession(req);
   if (!success) return response;
 
   try {
-    const { id } = await context.params;
+
+    const id = context?.params?.id;
 
     if (!id) {
       return NextResponse.json(
-        { success: false, message: "Level ID required." },
+        { success: false, message: "Level ID required" },
         { status: 400 }
       );
     }
@@ -118,22 +125,63 @@ export async function PATCH(req, context) {
 
     if (!snapshot.exists()) {
       return NextResponse.json(
-        { success: false, message: "Level not found." },
+        { success: false, message: "Level not found" },
         { status: 404 }
       );
     }
 
     const existingLevel = snapshot.val();
 
-    // Check if user is owner or admin
-    if (existingLevel.authorUid !== user.uid && !isAdmin(user)) {
-      console.log(
-        `🚫 User ${user.email} attempted to update level ${id} without permission`
-      );
+    const pinRequired =
+      typeof existingLevel.pin === "string" &&
+      existingLevel.pin.length > 0;
+
+    let hasPermission = false;
+
+    // Owner or admin
+    if (
+      existingLevel.authorUid === user.uid ||
+      isAdmin(user)
+    ) {
+      hasPermission = true;
+    }
+
+    // PIN access
+    else if (pinRequired) {
+
+      const providedPin =
+        req.headers.get("x-level-pin");
+
+      if (!providedPin) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "PIN_REQUIRED",
+            message: "PIN required",
+          },
+          { status: 403 }
+        );
+      }
+
+      if (providedPin !== existingLevel.pin) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "INVALID_PIN",
+            message: "Invalid PIN",
+          },
+          { status: 403 }
+        );
+      }
+
+      hasPermission = true;
+    }
+
+    if (!hasPermission) {
       return NextResponse.json(
         {
           success: false,
-          message: "You don't have permission to update this level.",
+          message: "Forbidden",
         },
         { status: 403 }
       );
@@ -141,72 +189,17 @@ export async function PATCH(req, context) {
 
     const body = await req.json();
 
-    // Fields that can be updated
-    const {
-      name,
-      description,
-      options,
-      answers,
-      keywords,
-      pin,
-      isPublished,
-      poses,
-    } = body;
-
-    // Validate if fields are provided
-    if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
-      return NextResponse.json(
-        { success: false, message: "Valid name required." },
-        { status: 400 }
-      );
-    }
-
-    if (options !== undefined && !Array.isArray(options)) {
-      return NextResponse.json(
-        { success: false, message: "Options must be an array." },
-        { status: 400 }
-      );
-    }
-
-    if (answers !== undefined && !Array.isArray(answers)) {
-      return NextResponse.json(
-        { success: false, message: "Answers must be an array." },
-        { status: 400 }
-      );
-    }
-
-    if (
-      poses !== undefined &&
-      (typeof poses !== "object" || poses === null || Array.isArray(poses))
-    ) {
-      return NextResponse.json(
-        { success: false, message: "Poses must be an object." },
-        { status: 400 }
-      );
-    }
-
-    // Build update object with only provided fields
     const updates = {
+      ...body,
       updatedAt: Date.now(),
     };
 
-    if (name !== undefined) updates.name = name;
-    if (description !== undefined) updates.description = description;
-    if (options !== undefined) updates.options = options;
-    if (answers !== undefined) updates.answers = answers;
-    if (keywords !== undefined) updates.keywords = keywords;
-    if (pin !== undefined) updates.pin = pin;
-    if (isPublished !== undefined) updates.isPublished = isPublished;
-    if (poses !== undefined) updates.poses = poses;
-
     await ref.update(updates);
 
-    console.log(`✅ Level ${id} updated by ${user.email}`);
-
-    // Get updated level
     const updatedSnapshot = await ref.get();
     const updatedLevel = updatedSnapshot.val();
-    const { pin: _, ...safeLevel } = updatedLevel;
+
+    const { pin, ...safeLevel } = updatedLevel;
 
     return NextResponse.json({
       success: true,
@@ -215,31 +208,37 @@ export async function PATCH(req, context) {
         ...safeLevel,
       },
     });
+
   } catch (err) {
-    console.error("❌ PATCH /levels/[id] error:", err);
+
+    console.error("PATCH level error:", err);
+
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to update level.",
+        message: err.message,
       },
       { status: 500 }
     );
   }
 }
 
+
 /* ===============================
    DELETE – Delete Level
 ================================ */
 export async function DELETE(req, context) {
-  const { success, user, response } = await requireSession();
+
+  const { success, user, response } = await requireSession(req);
   if (!success) return response;
 
   try {
-    const { id } = await context.params;
+
+    const id = context?.params?.id;
 
     if (!id) {
       return NextResponse.json(
-        { success: false, message: "Level ID required." },
+        { success: false, message: "Level ID required" },
         { status: 400 }
       );
     }
@@ -249,22 +248,61 @@ export async function DELETE(req, context) {
 
     if (!snapshot.exists()) {
       return NextResponse.json(
-        { success: false, message: "Level not found." },
+        { success: false, message: "Level not found" },
         { status: 404 }
       );
     }
 
     const level = snapshot.val();
 
-    // Check if user is owner or admin
-    if (level.authorUid !== user.uid && !isAdmin(user)) {
-      console.log(
-        `🚫 User ${user.email} attempted to delete level ${id} without permission`
-      );
+    const pinRequired =
+      typeof level.pin === "string" &&
+      level.pin.length > 0;
+
+    let hasPermission = false;
+
+    if (
+      level.authorUid === user.uid ||
+      isAdmin(user)
+    ) {
+      hasPermission = true;
+    }
+
+    else if (pinRequired) {
+
+      const providedPin =
+        req.headers.get("x-level-pin");
+
+      if (!providedPin) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "PIN_REQUIRED",
+            message: "PIN required",
+          },
+          { status: 403 }
+        );
+      }
+
+      if (providedPin !== level.pin) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "INVALID_PIN",
+            message: "Invalid PIN",
+          },
+          { status: 403 }
+        );
+      }
+
+      hasPermission = true;
+    }
+
+    if (!hasPermission) {
       return NextResponse.json(
         {
           success: false,
-          message: "You don't have permission to delete this level.",
+          message: "Forbidden",
         },
         { status: 403 }
       );
@@ -272,18 +310,19 @@ export async function DELETE(req, context) {
 
     await ref.remove();
 
-    console.log(`🗑️ Level ${id} deleted by ${user.email}`);
-
     return NextResponse.json({
       success: true,
-      message: "Level deleted successfully.",
+      message: "Level deleted",
     });
+
   } catch (err) {
-    console.error("❌ DELETE /levels/[id] error:", err);
+
+    console.error("DELETE level error:", err);
+
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to delete level.",
+        message: err.message,
       },
       { status: 500 }
     );

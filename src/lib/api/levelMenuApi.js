@@ -13,7 +13,7 @@ export const levelMenuApi = {
   /**
    * List all levels (public)
    * Returns metadata for all levels from LevelList
-   * @returns {Promise<{success: boolean, levels: Array<{id, name, author, authorUid, isPublished, keywords}>}>}
+   * @returns {Promise<{success: boolean, levels: Array<{id, name, author, authorUid, isPublished, keywords, hasPin}>}>}
    */
   async list() {
     return apiClient("/api/levels");
@@ -28,9 +28,7 @@ export const levelMenuApi = {
    */
   async getPreview(levelId, options = {}) {
     const { pin } = options;
-    const url = pin
-      ? `/api/levels/${levelId}?pin=${encodeURIComponent(pin)}`
-      : `/api/levels/${levelId}`;
+    const url = `/api/levels/${levelId}`;
 
     const headers = {};
     if (pin) {
@@ -138,10 +136,17 @@ export function isLevelPublished(level) {
 
 /**
  * Check if a level has a PIN
+ * Supports both `pin` field and `hasPin` boolean field
  * @param {Object} level - Level object
  * @returns {boolean}
  */
 export function isLevelProtected(level) {
+  // Check hasPin first (recommended backend approach)
+  if (typeof level?.hasPin === 'boolean') {
+    return level.hasPin;
+  }
+  
+  // Fallback: check pin field directly
   return Boolean(level?.pin && level.pin.length > 0);
 }
 
@@ -201,6 +206,39 @@ export function getLevelStats(levels) {
     protected: levels.filter((l) => isLevelProtected(l)).length,
     authors: new Set(levels.map((l) => l.authorUid)).size,
   };
+}
+
+/**
+ * Store verified PIN in session storage
+ * @param {string} levelId - Level ID
+ * @param {string} pin - Verified PIN
+ */
+export function storeVerifiedPin(levelId, pin) {
+  if (typeof window !== "undefined" && pin) {
+    sessionStorage.setItem(`level_pin_${levelId}`, pin);
+  }
+}
+
+/**
+ * Get stored PIN from session storage
+ * @param {string} levelId - Level ID
+ * @returns {string|null} Stored PIN or null
+ */
+export function getStoredPin(levelId) {
+  if (typeof window !== "undefined") {
+    return sessionStorage.getItem(`level_pin_${levelId}`);
+  }
+  return null;
+}
+
+/**
+ * Clear stored PIN from session storage
+ * @param {string} levelId - Level ID
+ */
+export function clearStoredPin(levelId) {
+  if (typeof window !== "undefined") {
+    sessionStorage.removeItem(`level_pin_${levelId}`);
+  }
 }
 
 export default levelMenuApi;

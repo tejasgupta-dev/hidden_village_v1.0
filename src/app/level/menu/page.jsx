@@ -1,233 +1,303 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { levelMenuApi } from "@/lib/api/levelMenuApi"; // Update path
+import React, { useEffect, useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import {
+  levelMenuApi,
+  searchLevels,
+  filterLevelsByStatus,
+  isLevelProtected,
+} from "@/lib/api/levelMenuApi";
 
-export default function LevelMenu() {
+function LevelMenu({ mode }) {
+  const router = useRouter();
+
+  const playMode = mode === "play";
+  const editMode = mode === "edit";
+
   const [levels, setLevels] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  
-  // Modal state
-  const [selectedLevel, setSelectedLevel] = useState(null);
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState("");
-  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState(null);
 
+  const [search, setSearch] = useState("");
+
+  // PIN modal state
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [selectedLevelId, setSelectedLevelId] = useState(null);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [pinLoading, setPinLoading] = useState(false);
+
+  // fetch levels
   useEffect(() => {
-    async function fetchLevels() {
+    let mounted = true;
+
+    const fetchLevels = async () => {
       try {
         setLoading(true);
-        const response = await levelMenuApi.list();
-        
-        if (response.success) {
-          setLevels(response.levels || []);
-        } else {
-          throw new Error("Failed to fetch levels");
+        setError(null);
+
+        const res = await levelMenuApi.list();
+
+        if (!mounted) return;
+
+        if (!res?.success || !Array.isArray(res.levels)) {
+          setLevels([]);
+          return;
         }
+
+        // play = only published
+        // edit = all levels
+        const filtered = playMode
+          ? filterLevelsByStatus(res.levels, true)
+          : res.levels;
+
+        setLevels(filtered || []);
       } catch (err) {
-        console.error(err);
-        setError(err.message || "Error loading levels");
-        setLevels([]);
+        console.error("Error fetching levels:", err);
+        if (mounted) {
+          setError("Failed to load levels.");
+          setLevels([]);
+        }
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
-    }
+    };
 
     fetchLevels();
-  }, []);
 
-  const handleLevelClick = async (level) => {
-  console.log("Clicked level:", level.id);
-  
-  try {
-    const response = await levelMenuApi.getPreview(level.id);
-    
-    console.log("Preview response:", response);
-    
-    if (response.success) {
-      console.log("✅ Access granted, navigating...");
-      window.location.href = `/level/${level.id}`;
-    }
-  } catch (err) {
-    console.error("Error accessing level:", err);
-    console.log("Error code:", err.code);
-    console.log("Error status:", err.status);
-    console.log("Error message:", err.message);
-    console.log("Error data:", err.data);
-    
-    // Check the error code that we preserved in apiClient
-    if (err.code === "PIN_REQUIRED") {
-      console.log("🔒 PIN required, opening modal");
-      setSelectedLevel(level);
-      setPinInput("");
-      setPinError("");
-      return; // STOP HERE - don't redirect
-    }
-    
-    if (err.code === "INVALID_PIN") {
-      console.log("❌ Invalid PIN");
-      setPinError("Incorrect PIN");
-      return; // STOP HERE
-    }
-    
-    if (err.status === 404) {
-      console.log("❌ Level not found");
-      alert("Level not found. It may have been deleted.");
-      return; // STOP HERE
-    }
-    
-    if (err.status === 401) {
-      console.log("❌ Not authenticated");
-      alert("Please log in to access levels");
-      window.location.href = "/login";
-      return; // STOP HERE
-    }
-    
-    // Default error
-    console.log("❌ Unknown error");
-    alert(`Error accessing level: ${err.message || "Unknown error"}`);
-    return; // STOP HERE
-  }
-};
+    return () => {
+      mounted = false;
+    };
+  }, [playMode]);
 
+  // FIX: memoize and ensure array
+  const filteredLevels = useMemo(() => {
+    if (!Array.isArray(levels)) return [];
+    return searchLevels(levels, search || "");
+  }, [levels, search]);
+
+  // click level → check if protected, then navigate
+  const handleSelectLevel = async (levelId) => {
+    if (!levelId) return;
+
+    try {
+      const res = await levelMenuApi.getPreview(levelId);
+
+      if (!res.success) {
+        alert("Failed to load level");
+        return;
+      }
+
+      if (res.hasPin) {
+        setSelectedLevelId(levelId);
+        setShowPinModal(true);
+        setPin("");
+        setPinError("");
+        return;
+      }
+
+      // No pin required
+      navigateToLevel(levelId);
+
+    } catch (err) {
+      console.error(err);
+      alert("Error loading level");
+    }
+  };
+
+
+  const navigateToLevel = (levelId, verifiedPin = null) => {
+    if (!levelId) return;
+
+    // Store PIN for level page
+    if (verifiedPin) {
+      sessionStorage.setItem(`level_pin_${levelId}`, verifiedPin);
+    }
+
+    router.push(`/level/${levelId}`);
+  };
+
+
+  // Handle PIN submission
   const handlePinSubmit = async (e) => {
     e.preventDefault();
-    setPinError("");
-    setVerifying(true);
     
+    if (!pin.trim()) {
+      setPinError("Please enter a PIN");
+      return;
+    }
+
+    setPinLoading(true);
+    setPinError("");
+
     try {
-      const response = await levelMenuApi.getPreview(selectedLevel.id, {
-        pin: pinInput,
-      });
+      // Verify PIN by getting level preview with PIN header
+      const res = await levelMenuApi.getPreview(selectedLevelId, { pin });
 
-      console.log("PIN verification response:", response);
-
-      if (response.success) {
-        console.log("✅ PIN verified, navigating...");
-        // PIN verified, navigate to level
-        window.location.href = `/level/${selectedLevel.id}`;
+      if (res.success) {
+        // PIN correct, close modal and navigate with verified PIN
+        setShowPinModal(false);
+        navigateToLevel(selectedLevelId, pin);
       } else {
         setPinError("Incorrect PIN");
       }
     } catch (err) {
       console.error("PIN verification error:", err);
-      const errorData = err.response || err;
-      
-      if (errorData.code === "INVALID_PIN" || errorData.message?.includes("Invalid PIN")) {
-        setPinError("Incorrect PIN");
-      } else {
-        setPinError(errorData.message || "Error verifying PIN");
-      }
+      setPinError("Incorrect PIN or error verifying");
     } finally {
-      setVerifying(false);
+      setPinLoading(false);
     }
   };
 
-  const closeModal = () => {
-    setSelectedLevel(null);
-    setPinInput("");
+  const closePinModal = () => {
+    setShowPinModal(false);
+    setSelectedLevelId(null);
+    setPin("");
     setPinError("");
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-lg">Loading levels...</div>
-      </div>
-    );
-  }
+  // render UI
+  if (loading)
+    return <p className="text-center text-gray-600">Loading levels...</p>;
 
-  if (error) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-red-500">Error: {error}</div>
-      </div>
-    );
-  }
+  if (error) return <p className="text-center text-red-600">⚠️ {error}</p>;
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Level Menu</h1>
+    <>
+      <div className="container mx-auto px-4 py-8">
+        <h2 className="text-3xl font-bold mb-6">
+          {playMode ? "Play Levels" : "Edit Levels"}
+        </h2>
 
-      {levels.length === 0 ? (
-        <div className="text-gray-500">No levels found</div>
-      ) : (
-        <div className="space-y-2">
-          {levels.map((level) => (
-            <div
-              key={level.id}
-              onClick={() => handleLevelClick(level)}
-              className="border p-4 rounded cursor-pointer hover:bg-gray-100 transition-colors"
-            >
-              <h2 className="font-semibold">{level.name}</h2>
-              <p className="text-sm text-gray-600">by {level.author}</p>
-              {level.keywords && (
-                <p className="text-xs text-gray-500 mt-1">{level.keywords}</p>
-              )}
-              {!level.isPublished && (
-                <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded mt-2 inline-block">
-                  Draft
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+        <input
+          placeholder="Search by name, author, or keyword"
+          className="w-full px-4 py-2 mb-6 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+
+        {levels.length === 0 ? (
+          <p className="text-center text-gray-600 py-8">
+            {playMode ? "No published levels available" : "No levels found"}
+          </p>
+        ) : filteredLevels.length === 0 ? (
+          <p className="text-center text-gray-600 py-8">
+            No levels match your search
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                    Name
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                    Author
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                    Keywords
+                  </th>
+                  {!playMode && (
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                      Status
+                    </th>
+                  )}
+                </tr>
+              </thead>
+
+              <tbody>
+                {filteredLevels.map((lvl) => (
+                  <tr
+                    key={lvl.id}
+                    onClick={() => handleSelectLevel(lvl.id)}
+                    className="border-t border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors"
+                  >
+                    <td className="px-6 py-4 text-sm text-gray-900 truncate max-w-xs">
+                      {lvl.name || "Untitled Level"}
+                      {isLevelProtected(lvl) && (
+                        <span className="ml-2 text-yellow-600">🔒</span>
+                      )}
+                    </td>
+
+                    <td className="px-6 py-4 text-sm text-gray-600 truncate max-w-xs">
+                      {lvl.author || "Unknown"}
+                    </td>
+
+                    <td className="px-6 py-4 text-sm text-gray-600 truncate max-w-xs">
+                      {Array.isArray(lvl.keywords)
+                        ? lvl.keywords.join(", ")
+                        : lvl.keywords || "None"}
+                    </td>
+
+                    {!playMode && (
+                      <td className="px-6 py-4 text-sm">
+                        <span
+                          className={
+                            lvl.isPublished
+                              ? "text-green-600"
+                              : "text-orange-600"
+                          }
+                        >
+                          {lvl.isPublished ? "✅ Published" : "❌ Draft"}
+                        </span>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* PIN Modal */}
-      {selectedLevel && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-          onClick={closeModal}
-        >
-          <div
-            className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-xl font-bold mb-2">
-              🔒 PIN Required
-            </h2>
+      {showPinModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold mb-4">Protected Level</h3>
             <p className="text-gray-600 mb-4">
-              Enter PIN for <strong>{selectedLevel.name}</strong>
+              This level is protected. Please enter the PIN to access it.
             </p>
 
             <form onSubmit={handlePinSubmit}>
               <input
                 type="password"
-                value={pinInput}
-                onChange={(e) => setPinInput(e.target.value)}
                 placeholder="Enter PIN"
-                className="w-full px-4 py-2 border rounded mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
                 autoFocus
-                disabled={verifying}
               />
 
               {pinError && (
-                <p className="text-red-500 text-sm mb-3">❌ {pinError}</p>
+                <p className="text-red-600 text-sm mb-4">{pinError}</p>
               )}
 
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={verifying || !pinInput.trim()}
-                  className="flex-1 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-                >
-                  {verifying ? "Verifying..." : "Submit"}
-                </button>
+              <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={closeModal}
-                  disabled={verifying}
-                  className="flex-1 bg-gray-300 px-4 py-2 rounded hover:bg-gray-400 disabled:opacity-50 transition-colors"
+                  onClick={closePinModal}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  disabled={pinLoading}
                 >
                   Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  disabled={pinLoading}
+                >
+                  {pinLoading ? "Verifying..." : "Submit"}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
+
+export default LevelMenu;
