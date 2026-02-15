@@ -194,27 +194,33 @@ export default function GameEditor({ isNew = false }) {
               <p className="font-semibold text-gray-900 text-sm mb-2">Select a level to add:</p>
 
               <div className="flex flex-col gap-2 max-h-60 overflow-y-auto">
-                {Object.entries(allAvailableLevels).map(
-                  ([levelId, levelData]) => (
-                    <div
-                      key={levelId}
-                      className={`flex justify-between p-2 rounded border text-sm ${
-                        game.levelIds.includes(levelId)
-                          ? "bg-gray-200 border-gray-300 cursor-not-allowed opacity-50"
-                          : "bg-white border-gray-300 hover:border-blue-500 hover:bg-blue-50 cursor-pointer"
-                      }`}
-                      onClick={() =>
-                        !game.levelIds.includes(levelId) && addLevel(levelId)
-                      }
-                    >
-                      <span className="text-gray-900">{levelData.name || "Untitled Level"}</span>
+                {Object.keys(allAvailableLevels).length === 0 ? (
+                  <p className="text-center text-gray-500 italic py-4">
+                    No levels available. Create a level first.
+                  </p>
+                ) : (
+                  Object.entries(allAvailableLevels).map(
+                    ([levelId, levelData]) => (
+                      <div
+                        key={levelId}
+                        className={`flex justify-between p-2 rounded border text-sm ${
+                          game.levelIds?.includes(levelId)
+                            ? "bg-gray-200 border-gray-300 cursor-not-allowed opacity-50"
+                            : "bg-white border-gray-300 hover:border-blue-500 hover:bg-blue-50 cursor-pointer"
+                        }`}
+                        onClick={() =>
+                          !game.levelIds?.includes(levelId) && addLevel(levelId)
+                        }
+                      >
+                        <span className="text-gray-900">{levelData.name || "Untitled Level"}</span>
 
-                      {game.levelIds.includes(levelId) && (
-                        <span className="text-green-600 font-semibold">
-                          ✓ Added
-                        </span>
-                      )}
-                    </div>
+                        {game.levelIds?.includes(levelId) && (
+                          <span className="text-green-600 font-semibold">
+                            ✓ Added
+                          </span>
+                        )}
+                      </div>
+                    )
                   )
                 )}
               </div>
@@ -223,7 +229,7 @@ export default function GameEditor({ isNew = false }) {
 
           {/* Level List */}
           <div className="space-y-2">
-            {game.levelIds.length === 0 ? (
+            {!game.levelIds || game.levelIds.length === 0 ? (
               <p className="text-center text-gray-500 italic py-8 bg-gray-50 rounded text-sm">
                 No levels added yet. Click "Add Level" to get started.
               </p>
@@ -240,7 +246,7 @@ export default function GameEditor({ isNew = false }) {
                       <span className="text-gray-900 text-sm">
                         {levelData.name || "Untitled Level"}
 
-                        {game.storyline[index]?.length > 0 && (
+                        {game.storyline?.[index]?.length > 0 && (
                           <span className="ml-2 text-gray-500 text-xs">
                             📖 {game.storyline[index].length} dialogue
                             {game.storyline[index].length !== 1 ? "s" : ""}

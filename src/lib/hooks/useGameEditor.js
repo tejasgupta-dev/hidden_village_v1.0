@@ -18,7 +18,7 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     levelIds: [],
     storyline: [],
     settings: {},
-    requiresPin: false,
+    isPublished: false,
   });
 
   const [loadingGame, setLoadingGame] = useState(true);
@@ -45,9 +45,19 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
 
   const loadAvailableLevels = async () => {
     try {
-      const res = await fetch("/api/level/list");
+      const res = await fetch("/api/levels", {
+        credentials: "include",
+      });
       const data = await res.json();
-      if (res.ok && data.success) setAllAvailableLevels(data.data || {});
+      
+      if (res.ok && data.success) {
+        // Convert array to object keyed by id
+        const levelsObj = {};
+        data.levels.forEach((level) => {
+          levelsObj[level.id] = level;
+        });
+        setAllAvailableLevels(levelsObj);
+      }
     } catch (err) {
       console.error("Error loading levels:", err);
     }
@@ -58,28 +68,67 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
 
     try {
       const isAdmin = user?.roles?.includes("admin");
-      const savedPin = isAdmin ? "" : sessionStorage.getItem("editorPin") || "";
+      
+      // Try to get game without PIN first
+      let url = `/api/games/${id}`;
+      
+      // If not admin, check sessionStorage for saved PIN
+      if (!isAdmin) {
+        const savedPin = sessionStorage.getItem(`editorPin_${id}`) || "";
+        if (savedPin) {
+          url += `?pin=${encodeURIComponent(savedPin)}`;
+        }
+      }
 
-      const res = await fetch("/api/game/get", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, pin: savedPin }),
+      const res = await fetch(url, {
+        credentials: "include",
       });
 
       const data = await res.json();
 
-      if (!res.ok || !data.success) {
-        alert(data.message || "Failed to load game.");
-        router.replace("/game/edit/menu");
+      // Handle PIN required
+      if (res.status === 403 && data.code === "PIN_REQUIRED") {
+        const pin = prompt("This game requires a PIN to edit:");
+        
+        if (!pin) {
+          router.replace("/game");
+          return;
+        }
+
+        // Retry with PIN
+        const retryRes = await fetch(`/api/games/${id}?pin=${encodeURIComponent(pin)}`, {
+          credentials: "include",
+        });
+
+        const retryData = await retryRes.json();
+
+        if (!retryRes.ok) {
+          alert(retryData.message || "Invalid PIN");
+          router.replace("/game");
+          return;
+        }
+
+        // Save PIN to sessionStorage
+        if (!isAdmin) {
+          sessionStorage.setItem(`editorPin_${id}`, pin);
+        }
+
+        setGame({ ...retryData.game, id });
+        setLoadingGame(false);
         return;
       }
 
-      // ensure id is stored
-      setGame({ ...data.data, id });
+      if (!res.ok || !data.success) {
+        alert(data.message || "Failed to load game.");
+        router.replace("/game");
+        return;
+      }
+
+      setGame({ ...data.game, id });
     } catch (err) {
       console.error("Error loading game:", err);
       alert("Unexpected error loading game.");
-      router.replace("/game/edit/menu");
+      router.replace("/game");
     } finally {
       setLoadingGame(false);
     }
@@ -92,14 +141,10 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     async (isPublish = false) => {
       if (!game) return;
 
-      const isAdmin = user?.roles?.includes("admin");
-
       setSavingGame(true);
 
       try {
         const payload = {
-          gameId: game.id ?? null,
-          enteredPin: isAdmin ? "" : sessionStorage.getItem("editorPin") || "",
           name: game.name,
           keywords: game.keywords,
           description: game.description,
@@ -107,30 +152,32 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
           storyline: game.storyline,
           settings: game.settings,
           isPublished: isPublish,
-          newPin: game.pin,
+          pin: game.pin,
         };
 
-        const res = await fetch("/api/game/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        // CREATE NEW GAME
+        if (isNew || !game.id) {
+          const res = await fetch("/api/games", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(payload),
+          });
 
-        const data = await res.json();
+          const data = await res.json();
 
-        if (!res.ok || !data.success) {
-          alert(data.message || "Failed to save game.");
-          return;
-        }
+          if (!res.ok || !data.success) {
+            alert(data.message || "Failed to create game.");
+            return;
+          }
 
-        // NEW GAME CREATED
-        if (!game.id && data.gameId) {
-          const newId = data.gameId;
+          const newId = data.id;
 
           setGame((prev) => ({ ...prev, id: newId }));
 
-          if (!isAdmin) {
-            sessionStorage.setItem("editorPin", game.pin || "");
+          // Save PIN to sessionStorage
+          if (game.pin && !user?.roles?.includes("admin")) {
+            sessionStorage.setItem(`editorPin_${newId}`, game.pin);
           }
 
           alert(
@@ -143,7 +190,27 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
           return;
         }
 
-        // UPDATE
+        // UPDATE EXISTING GAME
+        const res = await fetch(`/api/games/${game.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          alert(data.message || "Failed to save game.");
+          return;
+        }
+
+        // Update PIN in sessionStorage if changed
+        if (game.pin && !user?.roles?.includes("admin")) {
+          sessionStorage.setItem(`editorPin_${game.id}`, game.pin);
+        }
+
+        setGame({ ...data.game, id: game.id });
         alert(isPublish ? "Game published!" : "Draft saved!");
       } catch (err) {
         console.error(err);
@@ -152,7 +219,7 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
         setSavingGame(false);
       }
     },
-    [game, router, user]
+    [game, router, user, isNew]
   );
 
   // DELETE
@@ -165,18 +232,12 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
 
     if (!confirmed) return;
 
-    const isAdmin = user?.roles?.includes("admin");
-
     setSavingGame(true);
 
     try {
-      const res = await fetch("/api/game/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: game.id,
-          pin: isAdmin ? "" : sessionStorage.getItem("editorPin") || "",
-        }),
+      const res = await fetch(`/api/games/${game.id}`, {
+        method: "DELETE",
+        credentials: "include",
       });
 
       const data = await res.json();
@@ -188,11 +249,12 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
 
       alert("Game deleted successfully!");
       
-      if (!isAdmin) {
-        sessionStorage.removeItem("editorPin");
+      // Clear PIN from sessionStorage
+      if (!user?.roles?.includes("admin")) {
+        sessionStorage.removeItem(`editorPin_${game.id}`);
       }
       
-      router.replace("/game/edit/menu");
+      router.replace("/game");
     } catch (err) {
       console.error("Error deleting game:", err);
       alert("Unexpected error deleting game.");
@@ -234,7 +296,11 @@ export const useGameEditor = (gameId, isNew, userEmail) => {
     addLevel: (levelId) => {
       setGame((prev) => {
         if (prev.levelIds.includes(levelId)) return prev;
-        return { ...prev, levelIds: [...prev.levelIds, levelId] };
+        return {
+          ...prev,
+          levelIds: [...prev.levelIds, levelId],
+          storyline: [...prev.storyline, []], // Add empty storyline slot
+        };
       });
       setShowAddLevel(false);
     },

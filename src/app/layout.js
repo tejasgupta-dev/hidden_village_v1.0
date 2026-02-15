@@ -1,6 +1,6 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/lib/contexts/AuthContext";
-import BackgroundGrid from "@/lib/background/backgroundGrid";
+import BackgroundGrid from "@/components/background/backgroundGrid";
 import "./globals.css";
 
 

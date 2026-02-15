@@ -1,336 +1,282 @@
 "use client";
 
-import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { Plus, Trash2 } from "lucide-react";
+import { Check, X, Plus, Trash2, Camera } from "lucide-react";
+import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
+import PoseCapture from "@/components/Pose/poseCapture";
 
-export default function NewLevel() {
-  const router = useRouter();
+export default function NewLevelPage() {
   const { user } = useAuth();
 
-  const [level, setLevel] = useState({
-    name: "",
-    keywords: "",
-    poses: {},
-    description: "",
-    question: "",
-    options: [],
-    answers: [],
-    pin: "",
-  });
+  const {
+    level,
+    setLevel,
+    loadingLevel,
+    savingLevel,
+    message,
+    addPose,
+    updatePose,
+    removePose,
+    addOption,
+    updateOption,
+    removeOption,
+    toggleAnswer,
+    handleSave,
+    handleBack,
+  } = useLevelEditor(null, true, user?.email); // levelId = null, isNew = true
 
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [editingPin, setEditingPin] = useState(false);
+  const [pinValue, setPinValue] = useState("");
+  const [showPoseCapture, setShowPoseCapture] = useState(false);
 
-  /* =========================
-     Pose Handlers
-  ========================== */
-  const addPose = () => {
-    const key = `pose${Date.now()}`;
-    setLevel((prev) => ({
-      ...prev,
-      poses: { ...prev.poses, [key]: "" },
-    }));
-  };
+  const pinRef = useRef(null);
 
-  const updatePose = (key, val) => {
-    setLevel((prev) => ({
-      ...prev,
-      poses: { ...prev.poses, [key]: val },
-    }));
-  };
-
-  const removePose = (key) => {
-    setLevel((prev) => {
-      const copy = { ...prev.poses };
-      delete copy[key];
-      return { ...prev, poses: copy };
-    });
-  };
-
-  /* =========================
-     Options & Answers
-  ========================== */
-  const addOption = () => {
-    setLevel((prev) => ({
-      ...prev,
-      options: [...prev.options, ""],
-    }));
-  };
-
-  const updateOption = (i, val) => {
-    setLevel((prev) => {
-      const updated = [...prev.options];
-      updated[i] = val;
-      return { ...prev, options: updated };
-    });
-  };
-
-  const removeOption = (i) => {
-    setLevel((prev) => ({
-      ...prev,
-      options: prev.options.filter((_, idx) => idx !== i),
-      answers: prev.answers.filter((ans) => ans !== i),
-    }));
-  };
-
-  const toggleAnswer = (i) => {
-    setLevel((prev) => ({
-      ...prev,
-      answers: prev.answers.includes(i)
-        ? prev.answers.filter((a) => a !== i)
-        : [...prev.answers, i],
-    }));
-  };
-
-  /* =========================
-     Save / Publish (API)
-  ========================== */
-  const saveLevel = async (publish) => {
-    if (!user) {
-      setMsg("You must be logged in.");
-      return;
+  // Sync pinValue with level.pin
+  useEffect(() => {
+    if (level.pin) {
+      setPinValue(level.pin);
     }
+  }, [level.pin]);
 
-    setSaving(true);
-    setMsg("");
-
-    try {
-      const res = await fetch("/api/level/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: null,
-          newPin: level.pin || "",
-          name: level.name,
-          keywords: level.keywords,
-          poses: level.poses,
-          description: level.description,
-          question: level.question,
-          options: level.options,
-          answers: level.answers,
-          isPublished: publish,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        setMsg(data.message || "Error saving level.");
-        return;
-      }
-
-      const newLevelId = data.data?.levelId;
-
-      if (!newLevelId) {
-        setMsg("Level saved but no ID returned.");
-        return;
-      }
-
-      if (level.pin) {
-        sessionStorage.setItem("editorPin", level.pin);
-      }
-
-      alert(publish ? "Level created and published!" : "Draft created!");
-      router.push(`/level/edit/${newLevelId}`);
-
-    } catch (err) {
-      console.error("Create level error:", err);
-      setMsg("Unexpected error creating level.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  if (loadingLevel) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-lg">Loading...</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-transparent py-4 px-3">
-      <div className="max-w-3xl mx-auto">
-        
-        {/* HEADER */}
-        <h1 className="text-2xl font-bold text-gray-900 text-center mb-1">
-          Create Level
-        </h1>
-        <p className="text-sm text-gray-600 text-center mb-4">
-          {user?.email || ""}
-        </p>
+    <div className="max-w-6xl mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-4">Create New Level</h1>
 
-        {msg && (
-          <div className="mb-3 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm text-center font-medium">
-            {msg}
+      {message && (
+        <div className="bg-blue-600 text-white px-4 py-2 rounded mb-3">
+          {message}
+        </div>
+      )}
+
+      {/* NAME */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-1">Level Name *</label>
+        <input
+          value={level.name || ""}
+          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
+          placeholder="Enter level name"
+          className="border p-2 w-full rounded"
+        />
+      </div>
+
+      {/* KEYWORDS */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-1">Keywords</label>
+        <input
+          value={level.keywords || ""}
+          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
+          placeholder="puzzle, challenge, easy"
+          className="border p-2 w-full rounded"
+        />
+      </div>
+
+      {/* DESCRIPTION */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-1">Description</label>
+        <textarea
+          value={level.description || ""}
+          onChange={(e) => setLevel((prev) => ({ ...prev, description: e.target.value }))}
+          placeholder="Describe this level..."
+          className="border p-2 w-full rounded"
+          rows={3}
+        />
+      </div>
+
+      {/* QUESTION */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-1">Question</label>
+        <textarea
+          value={level.question || ""}
+          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
+          placeholder="What question should players answer?"
+          className="border p-2 w-full rounded"
+          rows={2}
+        />
+      </div>
+
+      {/* PIN */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-2">PIN Protection (Optional)</label>
+        {editingPin ? (
+          <div className="flex gap-2">
+            <input
+              ref={pinRef}
+              type="password"
+              value={pinValue}
+              onChange={(e) => setPinValue(e.target.value)}
+              placeholder="Enter PIN (min 4 characters)"
+              className="border p-2 flex-1 rounded"
+            />
+            <button
+              onClick={() => {
+                setLevel((prev) => ({ ...prev, pin: pinValue }));
+                setEditingPin(false);
+              }}
+              className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+            >
+              <Check size={16} />
+            </button>
+            <button
+              onClick={() => {
+                setPinValue("");
+                setEditingPin(false);
+              }}
+              className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setPinValue(level.pin || "");
+                setEditingPin(true);
+                setTimeout(() => pinRef.current?.focus(), 0);
+              }}
+              className="border px-3 py-2 rounded hover:bg-gray-100"
+            >
+              {level.pin ? "🔒 Change PIN" : "🔓 Set PIN"}
+            </button>
+            {level.pin && (
+              <button
+                onClick={() => setLevel((prev) => ({ ...prev, pin: "" }))}
+                className="text-red-600 hover:text-red-800 px-3 py-2"
+              >
+                Remove PIN
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* POSES */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-2">Poses</label>
+
+        <button
+          onClick={() => setShowPoseCapture(!showPoseCapture)}
+          className="bg-purple-600 text-white px-3 py-2 rounded mb-2 flex items-center gap-2 hover:bg-purple-700"
+        >
+          <Camera size={16} />
+          {showPoseCapture ? "Hide Pose Capture" : "Capture Pose"}
+        </button>
+
+        {showPoseCapture && (
+          <div className="mb-3">
+            <PoseCapture
+              poses={level.poses || {}}
+              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
+            />
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          
-          {/* LEFT COLUMN */}
-          <div className="space-y-3">
-            
-            {/* BASIC INFO */}
-            <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-3">Basic Info</h2>
-              
-              <div className="space-y-2">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-900 mb-1">Name *</label>
+        {level.poses && Object.keys(level.poses).length > 0 && (
+          <div className="space-y-2">
+            {Object.entries(level.poses).map(([key, val]) => (
+              <div key={key} className="flex gap-2 items-center">
+                <span className="text-sm text-gray-600 w-32 truncate">{key}:</span>
+                <input
+                  value={typeof val === "string" ? val : JSON.stringify(val)}
+                  disabled
+                  className="border p-2 flex-1 bg-gray-50 rounded text-sm"
+                />
+                <button
+                  onClick={() => removePose(key)}
+                  className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* OPTIONS & ANSWERS */}
+      <div className="mb-6">
+        <label className="block text-sm font-medium mb-2">Options & Answers</label>
+
+        {level.options && level.options.length > 0 ? (
+          <div className="space-y-2 mb-3">
+            {level.options.map((opt, i) => (
+              <div key={i} className="flex gap-2 items-center">
+                <span className="text-sm text-gray-600 w-8">{i + 1}.</span>
+
+                <input
+                  value={opt || ""}
+                  onChange={(e) => updateOption(i, e.target.value)}
+                  placeholder={`Option ${i + 1}`}
+                  className="border p-2 flex-1 rounded"
+                />
+
+                <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap">
                   <input
-                    value={level.name}
-                    onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
-                    className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Level name..."
+                    type="checkbox"
+                    checked={level.answers && level.answers.includes(i)}
+                    onChange={() => toggleAnswer(i)}
+                    className="w-4 h-4"
                   />
-                </div>
+                  <span className="text-sm">Correct</span>
+                </label>
 
-                <div>
-                  <label className="block text-xs font-semibold text-gray-900 mb-1">Keywords</label>
-                  <input
-                    value={level.keywords}
-                    onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
-                    className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="yoga, balance..."
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-900 mb-1">Description</label>
-                  <textarea
-                    rows={2}
-                    value={level.description}
-                    onChange={(e) => setLevel((prev) => ({ ...prev, description: e.target.value }))}
-                    className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                    placeholder="Brief description..."
-                  />
-                </div>
+                <button
+                  onClick={() => removeOption(i)}
+                  className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
-            </div>
-
-            {/* PIN */}
-            <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-2">PIN</h2>
-              <input
-                value={level.pin}
-                onChange={(e) => setLevel((prev) => ({ ...prev, pin: e.target.value }))}
-                className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Enter PIN..."
-              />
-            </div>
-
-            {/* POSES */}
-            <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-2">Poses</h2>
-
-              <div className="space-y-2 max-h-32 overflow-y-auto">
-                {Object.entries(level.poses || {}).map(([key, val]) => (
-                  <div className="flex gap-2 items-center" key={key}>
-                    <input
-                      value={val}
-                      onChange={(e) => updatePose(key, e.target.value)}
-                      className="flex-1 border border-gray-400 rounded px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Pose..."
-                    />
-                    <button
-                      className="p-1 bg-red-100 text-red-700 rounded hover:bg-red-600 hover:text-white"
-                      onClick={() => removePose(key)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              <button
-                className="mt-2 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center gap-1.5"
-                onClick={addPose}
-              >
-                <Plus size={14} />
-                Add Pose
-              </button>
-            </div>
+            ))}
           </div>
+        ) : (
+          <p className="text-gray-500 text-sm mb-3">No options added yet</p>
+        )}
 
-          {/* RIGHT COLUMN */}
-          <div className="space-y-3">
-            
-            {/* QUESTION */}
-            <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-2">Question</h2>
-              <textarea
-                rows={3}
-                value={level.question}
-                onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
-                className="w-full border border-gray-400 rounded px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                placeholder="Your question..."
-              />
-            </div>
+        <button
+          onClick={addOption}
+          className="bg-blue-600 text-white px-3 py-2 rounded flex items-center gap-2 hover:bg-blue-700"
+        >
+          <Plus size={14} />
+          Add Option
+        </button>
+      </div>
 
-            {/* OPTIONS */}
-            <div className="bg-white rounded-lg border border-gray-300 p-4">
-              <h2 className="text-sm font-bold text-gray-900 mb-2">Options</h2>
+      {/* ACTIONS */}
+      <div className="flex gap-3 flex-wrap items-center">
+        <button
+          disabled={savingLevel}
+          onClick={() => handleSave("", false)}
+          className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {savingLevel ? "Creating..." : "Create Draft"}
+        </button>
 
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {level.options.map((opt, i) => (
-                  <div key={i} className="flex gap-2 items-center">
-                    <input
-                      value={opt}
-                      onChange={(e) => updateOption(i, e.target.value)}
-                      className="flex-1 border border-gray-400 rounded px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder={`Option ${i + 1}...`}
-                    />
-                    <input
-                      type="checkbox"
-                      checked={level.answers.includes(i)}
-                      onChange={() => toggleAnswer(i)}
-                      className="w-4 h-4 text-blue-600 border-gray-400 rounded focus:ring-2 focus:ring-blue-500"
-                      title={level.answers.includes(i) ? "Correct" : "Incorrect"}
-                    />
-                    <button
-                      className="p-1 bg-red-100 text-red-700 rounded hover:bg-red-600 hover:text-white"
-                      onClick={() => removeOption(i)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
+        <button
+          disabled={savingLevel}
+          onClick={() => handleSave("", true)}
+          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {savingLevel ? "Creating..." : "Create & Publish"}
+        </button>
 
-              <button
-                className="mt-2 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center gap-1.5"
-                onClick={addOption}
-              >
-                <Plus size={14} />
-                Add Option
-              </button>
-            </div>
-          </div>
-        </div>
+        <button onClick={handleBack} className="border px-4 py-2 rounded hover:bg-gray-100">
+          Cancel
+        </button>
+      </div>
 
-        {/* ACTION BUTTONS */}
-        <div className="mt-3 bg-white rounded-lg border border-gray-300 p-3">
-          <div className="flex flex-wrap gap-2 justify-center">
-            <button
-              disabled={saving}
-              className="px-4 py-2 bg-gray-800 text-white text-sm font-semibold rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={() => saveLevel(false)}
-            >
-              Save Draft
-            </button>
-
-            <button
-              disabled={saving}
-              className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={() => saveLevel(true)}
-            >
-              Publish
-            </button>
-
-            <button
-              className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-gray-50"
-              onClick={() => router.back()}
-            >
-              Back
-            </button>
-          </div>
-        </div>
+      <div className="mt-4 text-sm text-gray-500">
+        * After creating, you'll be redirected to the edit page where you can continue working on your
+        level.
       </div>
     </div>
   );

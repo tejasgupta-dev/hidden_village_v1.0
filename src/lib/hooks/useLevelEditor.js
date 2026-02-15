@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
+import { levelEditorApi } from "@/lib/api/levelEditorApi";
 
 export const useLevelEditor = (levelId, isNew, userEmail) => {
   const router = useRouter();
@@ -41,25 +42,33 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     setLoadingLevel(true);
 
     try {
-      const savedPin = sessionStorage.getItem("editorPin") || "";
+      // Try to load with saved PIN if available
+      const savedPin = sessionStorage.getItem("editorPin");
+      const options = savedPin ? { pin: savedPin } : {};
 
-      const res = await fetch("/api/level/get", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, pin: savedPin }),
-      });
+      const { success, level: data } = await levelEditorApi.load(id, options);
 
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        alert(data.message || "Failed to load level.");
+      if (!success) {
+        alert("Failed to load level.");
         router.replace("/level/menu");
         return;
       }
 
-      setLevel({ ...data.data, id });
+      setLevel({ ...data, id });
     } catch (err) {
       console.error(err);
+      
+      // Check if PIN is required
+      if (err.message.includes("PIN")) {
+        const enteredPin = prompt("This level is PIN protected. Please enter the PIN:");
+        if (enteredPin) {
+          sessionStorage.setItem("editorPin", enteredPin);
+          // Retry loading with PIN
+          loadLevel(id);
+          return;
+        }
+      }
+      
       alert("Unexpected error loading level.");
       router.replace("/level/menu");
     } finally {
@@ -72,7 +81,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   const addPose = () => {
     const newKey = `pose_${Date.now()}`;
 
-    setLevel(prev => ({
+    setLevel((prev) => ({
       ...prev,
       poses: {
         ...(prev.poses || {}),
@@ -82,7 +91,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   };
 
   const updatePose = (key, value) => {
-    setLevel(prev => ({
+    setLevel((prev) => ({
       ...prev,
       poses: {
         ...prev.poses,
@@ -92,7 +101,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   };
 
   const removePose = (key) => {
-    setLevel(prev => {
+    setLevel((prev) => {
       const newPoses = { ...prev.poses };
       delete newPoses[key];
 
@@ -106,14 +115,14 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   /* ================= OPTIONS ================= */
 
   const addOption = () => {
-    setLevel(prev => ({
+    setLevel((prev) => ({
       ...prev,
       options: [...(prev.options || []), ""],
     }));
   };
 
   const updateOption = (index, value) => {
-    setLevel(prev => {
+    setLevel((prev) => {
       const newOptions = [...prev.options];
       newOptions[index] = value;
 
@@ -125,12 +134,12 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   };
 
   const removeOption = (index) => {
-    setLevel(prev => {
+    setLevel((prev) => {
       const newOptions = prev.options.filter((_, i) => i !== index);
 
       const newAnswers = prev.answers
-        .filter(a => a !== index)
-        .map(a => (a > index ? a - 1 : a));
+        .filter((a) => a !== index)
+        .map((a) => (a > index ? a - 1 : a));
 
       return {
         ...prev,
@@ -141,13 +150,13 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   };
 
   const toggleAnswer = (index) => {
-    setLevel(prev => {
+    setLevel((prev) => {
       const exists = prev.answers.includes(index);
 
       return {
         ...prev,
         answers: exists
-          ? prev.answers.filter(a => a !== index)
+          ? prev.answers.filter((a) => a !== index)
           : [...prev.answers, index],
       };
     });
@@ -156,36 +165,45 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   /* ================= SAVE ================= */
 
   const handleSave = useCallback(
-    async (enteredPin, publish = false) => {
+    async (enteredPin = "", publish = false) => {
       if (!level) return;
 
       setSavingLevel(true);
       setMessage("");
 
       try {
-        const payload = {
-          id: level.id ?? null,
-          pin: level.pin ?? "",
-          name: level.name,
-          keywords: level.keywords,
-          poses: level.poses,
-          description: level.description,
-          question: level.question,
-          options: level.options,
-          answers: level.answers,
-          isPublished: publish,
-        };
+        let result;
 
-        const res = await fetch("/api/level/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        if (!level.id) {
+          // CREATE
+          result = await levelEditorApi.create({
+            name: level.name,
+            keywords: level.keywords,
+            poses: level.poses,
+            description: level.description,
+            question: level.question,
+            options: level.options,
+            answers: level.answers,
+            isPublished: publish,
+            pin: level.pin ?? "",
+          });
+        } else {
+          // UPDATE
+          result = await levelEditorApi.save(level.id, {
+            name: level.name,
+            keywords: level.keywords,
+            poses: level.poses,
+            description: level.description,
+            question: level.question,
+            options: level.options,
+            answers: level.answers,
+            isPublished: publish,
+            pin: level.pin ?? "",
+          });
+        }
 
-        const data = await res.json();
-
-        if (!res.ok || !data.success) {
-          setMessage(data.message || "Failed to save level.");
+        if (!result.success) {
+          setMessage(result.message || "Failed to save level.");
           return;
         }
 
@@ -193,11 +211,10 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
           sessionStorage.setItem("editorPin", enteredPin);
         }
 
-        if (!level.id && data.data?.levelId) {
-          const newId = data.data.levelId;
-
+        // If newly created, redirect to edit page
+        if (!level.id && result.id) {
+          const newId = result.id;
           setLevel((prev) => ({ ...prev, id: newId }));
-
           router.replace(`/level/edit/${newId}`);
           return;
         }
@@ -205,6 +222,18 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         alert(publish ? "Level published!" : "Draft saved!");
       } catch (err) {
         console.error(err);
+        
+        // Handle PIN errors
+        if (err.message.includes("PIN")) {
+          const enteredPin = prompt("This level is PIN protected. Please enter the PIN:");
+          if (enteredPin) {
+            sessionStorage.setItem("editorPin", enteredPin);
+            // Retry save with PIN
+            handleSave(enteredPin, publish);
+            return;
+          }
+        }
+        
         setMessage("Unexpected error saving level.");
       } finally {
         setSavingLevel(false);
@@ -218,26 +247,27 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
   const handleDelete = async () => {
     if (!window.confirm("Delete this level?")) return;
 
-    const savedPin = sessionStorage.getItem("editorPin") || "";
+    try {
+      const { success, message: msg } = await levelEditorApi.delete(level.id);
 
-    const res = await fetch("/api/level/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        levelId: level.id,
-        enteredPin: savedPin,
-      }),
-    });
+      if (!success) {
+        alert(msg || "Failed to delete level.");
+        return;
+      }
 
-    const data = await res.json();
-
-    if (!res.ok || !data.success) {
-      alert(data.message || "Failed to delete level.");
-      return;
+      alert("Level deleted.");
+      router.replace("/level/menu");
+    } catch (err) {
+      console.error(err);
+      
+      // Handle PIN errors
+      if (err.message.includes("PIN")) {
+        alert("You don't have permission to delete this level.");
+        return;
+      }
+      
+      alert("Unexpected error deleting level.");
     }
-
-    alert("Level deleted.");
-    router.replace("/level/menu");
   };
 
   const handleBack = () => router.back();

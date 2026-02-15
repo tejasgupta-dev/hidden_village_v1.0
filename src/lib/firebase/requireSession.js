@@ -2,10 +2,6 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { auth } from "./firebaseAdmin";
 
-/**
- * Verify Firebase session cookie from request.
- * Returns { success, user, response }.
- */
 export async function requireSession() {
   try {
     const cookieStore = await cookies();
@@ -54,14 +50,13 @@ export async function requireSession() {
 }
 
 /**
- * Require user to be admin.
- * Wraps requireSession() and checks roles.includes("admin").
+ * Require user to be admin - use for admin-only endpoints.
  */
 export async function requireAdmin() {
   const { success, user, response } = await requireSession();
   if (!success) return { success, response };
 
-  if (!user.roles || !user.roles.includes("admin")) {
+  if (!isAdmin(user)) {
     return {
       success: false,
       response: NextResponse.json(
@@ -72,4 +67,11 @@ export async function requireAdmin() {
   }
 
   return { success: true, user };
+}
+
+/**
+ * Check if user has admin role - use for conditional admin features.
+ */
+export function isAdmin(user) {
+  return user?.roles && user.roles.includes("admin");
 }
