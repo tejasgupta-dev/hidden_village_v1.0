@@ -4,20 +4,22 @@ import { auth } from "@/lib/firebase/firebaseAdmin";
 
 export const runtime = "nodejs";
 
-/* ===============================
-   PATCH – Promote / Demote
-================================ */
-export async function PATCH(req, { params }) {
+// PATCH – Promote / Demote
+export async function PATCH(req, context) {
+
   const { success, user, response } = await requireAdmin(req);
   if (!success) return response;
 
   try {
-    const { uid } = params;
-    const { action } = await req.json(); // "promote" | "demote"
+
+    const { uid } = await context.params;
+
+    const body = await req.json();
+    const action = body?.action;
 
     if (!uid) {
       return NextResponse.json(
-        { success: false, message: "Valid UID required." },
+        { success: false, message: "UID required." },
         { status: 400 }
       );
     }
@@ -30,14 +32,16 @@ export async function PATCH(req, { params }) {
     }
 
     const userRecord = await auth.getUser(uid);
+
     const currentClaims = userRecord.customClaims || {};
-    let roles = currentClaims.roles || [];
+
+    let roles = Array.isArray(currentClaims.roles)
+      ? [...currentClaims.roles]
+      : [];
 
     if (action === "promote") {
       if (!roles.includes("admin")) roles.push("admin");
-    }
-
-    if (action === "demote") {
+    } else {
       roles = roles.filter((r) => r !== "admin");
     }
 
@@ -48,6 +52,7 @@ export async function PATCH(req, { params }) {
 
     return NextResponse.json({
       success: true,
+      roles,
       message:
         action === "promote"
           ? "User promoted to admin."
@@ -55,33 +60,35 @@ export async function PATCH(req, { params }) {
     });
 
   } catch (err) {
-    console.error("Role update error:", err);
+
+    console.error(err);
 
     return NextResponse.json(
-      { success: false, message: "Server error." },
+      { success: false, message: err.message },
       { status: 500 }
     );
+
   }
+
 }
 
-/* ===============================
-   DELETE – Remove User
-================================ */
-export async function DELETE(req, { params }) {
+
+export async function DELETE(req, context) {
+
   const { success, user, response } = await requireAdmin(req);
   if (!success) return response;
 
   try {
-    const { uid } = params;
+
+    const { uid } = await context.params;
 
     if (!uid) {
       return NextResponse.json(
-        { success: false, message: "Valid UID required." },
+        { success: false, message: "UID required." },
         { status: 400 }
       );
     }
 
-    // Prevent self-delete
     if (uid === user.uid) {
       return NextResponse.json(
         { success: false, message: "You cannot delete yourself." },
@@ -93,15 +100,18 @@ export async function DELETE(req, { params }) {
 
     return NextResponse.json({
       success: true,
-      message: "User deleted successfully.",
+      message: "User deleted.",
     });
 
   } catch (err) {
-    console.error("Delete user error:", err);
+
+    console.error(err);
 
     return NextResponse.json(
-      { success: false, message: "Server error." },
+      { success: false, message: err.message },
       { status: 500 }
     );
+
   }
+
 }

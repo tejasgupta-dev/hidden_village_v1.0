@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/firebase/firebaseAdmin";
 import { requireAdmin } from "@/lib/firebase/requireSession";
+import { auth } from "@/lib/firebase/firebaseAdmin";
 
 export const runtime = "nodejs";
 
@@ -9,16 +9,26 @@ export async function GET(req) {
   if (!success) return response;
 
   try {
-    const list = await auth.listUsers(1000);
+    let users = [];
+    let pageToken = undefined;
 
-    const users = list.users.map((u) => ({
-      uid: u.uid,
-      email: u.email ?? null,
-      roles: Array.isArray(u.customClaims?.roles)
-        ? u.customClaims.roles
-        : [],
-      disabled: u.disabled ?? false,
-    }));
+    do {
+      const result = await auth.listUsers(1000, pageToken);
+
+      users.push(
+        ...result.users.map((u) => ({
+          uid: u.uid,
+          email: u.email ?? null,
+          roles: Array.isArray(u.customClaims?.roles)
+            ? u.customClaims.roles
+            : [],
+          disabled: u.disabled ?? false,
+        }))
+      );
+
+      pageToken = result.pageToken;
+
+    } while (pageToken);
 
     return NextResponse.json({
       success: true,
@@ -26,7 +36,7 @@ export async function GET(req) {
     });
 
   } catch (err) {
-    console.error("Admin list error:", err);
+    console.error(err);
 
     return NextResponse.json(
       { success: false, message: "Server error." },
