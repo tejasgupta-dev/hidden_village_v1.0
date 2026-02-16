@@ -4,30 +4,21 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-/* ===============================
-   GET – List Games
-================================ */
 export async function GET(req) {
   try {
     const url = new URL(req.url);
-    const mode = url.searchParams.get("mode"); // "public" or default (manage)
+    const mode = url.searchParams.get("mode");
 
-    // ===============================
-    // PUBLIC MODE (No auth required)
-    // ===============================
     if (mode === "public") {
       const snapshot = await db.ref("GameList").get();
-
       if (!snapshot.exists()) {
         return NextResponse.json({
           success: true,
           games: [],
         });
       }
-
       const rawData = snapshot.val();
 
-      // Filter only published games
       const games = Object.entries(rawData)
         .filter(([_, game]) => game.isPublished === true)
         .map(([id, game]) => ({
@@ -42,9 +33,6 @@ export async function GET(req) {
       });
     }
 
-    // ===============================
-    // MANAGE MODE (Auth required)
-    // ===============================
     const { success, user, response } = await requireSession();
     if (!success) return response;
 
@@ -59,7 +47,6 @@ export async function GET(req) {
 
     const rawData = snapshot.val();
 
-    // Show ALL games to all authenticated users
     const games = Object.entries(rawData).map(([id, game]) => ({
       id,
       name: game.name ?? "",
@@ -68,8 +55,6 @@ export async function GET(req) {
       author: game.author ?? "",
       authorUid: game.authorUid ?? "",
     }));
-
-    console.log(`📋 Listed ${games.length} games for ${user.email}`);
 
     return NextResponse.json({
       success: true,
@@ -87,9 +72,6 @@ export async function GET(req) {
   }
 }
 
-/* ===============================
-   POST – Create Game
-================================ */
 export async function POST(req) {
   const { success, user, response } = await requireSession();
   if (!success) return response;
@@ -108,7 +90,6 @@ export async function POST(req) {
       isPublished = false,
     } = body;
 
-    // Validation
     if (!name || typeof name !== "string" || name.trim() === "") {
       return NextResponse.json(
         { success: false, message: "Valid name required." },
@@ -141,7 +122,6 @@ export async function POST(req) {
       );
     }
 
-    // Create new game
     const newRef = db.ref("Games").push();
     const gameId = newRef.key;
     const timestamp = Date.now();
@@ -161,7 +141,6 @@ export async function POST(req) {
       updatedAt: timestamp,
     };
 
-    // Update both Games and GameList
     await db.ref().update({
       [`Games/${gameId}`]: gameData,
       [`GameList/${gameId}`]: {
@@ -173,9 +152,6 @@ export async function POST(req) {
       },
     });
 
-    console.log(`✅ Game ${gameId} created by ${user.email}`);
-
-    // Return game without PIN
     const { pin: _, ...safeGame } = gameData;
 
     return NextResponse.json({

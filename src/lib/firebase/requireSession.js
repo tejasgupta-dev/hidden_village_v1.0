@@ -7,13 +7,7 @@ export async function requireSession() {
     const cookieStore = await cookies();
     const sessionCookie = cookieStore.get("session")?.value;
 
-    console.log("🔍 Session check:", {
-      hasCookie: !!sessionCookie,
-      length: sessionCookie?.length || 0,
-    });
-
     if (!sessionCookie) {
-      console.log("❌ No session cookie found");
       return {
         success: false,
         response: NextResponse.json(
@@ -24,8 +18,6 @@ export async function requireSession() {
     }
 
     const decoded = await auth.verifySessionCookie(sessionCookie, true);
-
-    console.log("✅ Session verified for:", decoded.email);
 
     if (!decoded.uid || !decoded.email) {
       return {
@@ -39,7 +31,6 @@ export async function requireSession() {
 
     return { success: true, user: decoded };
   } catch (err) {
-    console.error("❌ Session verification error:", err.code, err.message);
     const res = NextResponse.json(
       { message: "Unauthorized" },
       { status: 401 }

@@ -18,7 +18,6 @@ export async function POST(req) {
     await auth.verifyIdToken(token);
     const expiresIn = 60 * 60 * 24 * 1000;
 
-    // Create session cookie
     const sessionCookie = await auth.createSessionCookie(token, {
       expiresIn,
     });

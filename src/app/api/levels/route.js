@@ -4,7 +4,6 @@ import { requireSession } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-// GET – List Levels
 export async function GET(req) {
   try {
     const snapshot = await db.ref("LevelList").get();
@@ -39,7 +38,6 @@ export async function GET(req) {
   }
 }
 
-// POST – Create Level
 export async function POST(req) {
   const { success, user, response } = await requireSession(req);
   if (!success) return response;
@@ -87,11 +85,9 @@ export async function POST(req) {
       );
     }
 
-    // Create a unique ID for both collections
     const levelRef = db.ref("level").push();
     const levelId = levelRef.key;
 
-    // Full level data (with poses)
     const level = {
       name,
       description,
@@ -107,7 +103,6 @@ export async function POST(req) {
       updatedAt: Date.now(),
     };
 
-    // Metadata only (without poses) for LevelList
     const levelListEntry = {
       name,
       author: user.email || "anonymous",
@@ -116,7 +111,6 @@ export async function POST(req) {
       keywords,
     };
 
-    // Write to both collections using the same ID
     await db.ref(`level/${levelId}`).set(level);
     await db.ref(`LevelList/${levelId}`).set(levelListEntry);
 

@@ -4,7 +4,6 @@ import { auth } from "@/lib/firebase/firebaseAdmin";
 
 export const runtime = "nodejs";
 
-// PATCH – Promote / Demote
 export async function PATCH(req, context) {
 
   const { success, user, response } = await requireAdmin(req);

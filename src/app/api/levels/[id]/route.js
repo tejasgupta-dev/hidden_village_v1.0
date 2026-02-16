@@ -4,26 +4,11 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-/*
-Modes supported:
-
-1. Preview mode (no pin required)
-2. Access mode (pin provided)
-3. Update mode (owner/admin/pin)
-4. Delete mode (owner/admin/pin)
-*/
-
-/* ===============================
-   GET – Preview or Access Level
-================================ */
 export async function GET(req, context) {
   try {
-    // FIX: Properly await and extract the parameter
-    // The parameter name must match your folder name: [id] or [levelId]
     const params = await context.params;
     const id = params.id || params.levelId;
 
-    // FIX: Check for empty string, null, or undefined explicitly
     if (!id || id === "") {
       return NextResponse.json(
         { success: false, message: "Level ID required" },
@@ -93,9 +78,6 @@ export async function GET(req, context) {
 }
 
 
-/* ===============================
-   PATCH – Update Level
-================================ */
 export async function PATCH(req, context) {
 
   const { success, user, response } = await requireSession(req);
@@ -130,7 +112,6 @@ export async function PATCH(req, context) {
 
     let hasPermission = false;
 
-    // Owner or admin
     if (
       existingLevel.authorUid === user.uid ||
       isAdmin(user)
@@ -138,7 +119,6 @@ export async function PATCH(req, context) {
       hasPermission = true;
     }
 
-    // PIN access
     else if (pinRequired) {
 
       const providedPin =
