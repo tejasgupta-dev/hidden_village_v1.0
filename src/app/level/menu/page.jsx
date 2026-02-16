@@ -71,15 +71,35 @@ function LevelMenu({ mode }) {
     };
   }, [playMode]);
 
-  // FIX: memoize and ensure array
+  // Memoize and ensure array
   const filteredLevels = useMemo(() => {
     if (!Array.isArray(levels)) return [];
     return searchLevels(levels, search || "");
   }, [levels, search]);
 
-  // click level → check if protected, then navigate
+  // Navigate to level
+  const navigateToLevel = (levelId, verifiedPin = null) => {
+    if (!levelId) {
+      console.error("navigateToLevel: No level ID provided");
+      return;
+    }
+
+    // Store PIN for level page
+    if (verifiedPin) {
+      sessionStorage.setItem(`level_pin_${levelId}`, verifiedPin);
+    }
+
+    router.push(`/level/${levelId}`);
+  };
+
+  // Click level → check if protected, then navigate
   const handleSelectLevel = async (levelId) => {
-    if (!levelId) return;
+    if (!levelId) {
+      console.error("handleSelectLevel: No level ID provided");
+      return;
+    }
+
+    console.log("Selecting level with ID:", levelId);
 
     try {
       const res = await levelMenuApi.getPreview(levelId);
@@ -101,23 +121,10 @@ function LevelMenu({ mode }) {
       navigateToLevel(levelId);
 
     } catch (err) {
-      console.error(err);
-      alert("Error loading level");
+      console.error("Error in handleSelectLevel:", err);
+      alert("Error loading level: " + (err.message || "Unknown error"));
     }
   };
-
-
-  const navigateToLevel = (levelId, verifiedPin = null) => {
-    if (!levelId) return;
-
-    // Store PIN for level page
-    if (verifiedPin) {
-      sessionStorage.setItem(`level_pin_${levelId}`, verifiedPin);
-    }
-
-    router.push(`/level/${levelId}`);
-  };
-
 
   // Handle PIN submission
   const handlePinSubmit = async (e) => {
@@ -208,44 +215,49 @@ function LevelMenu({ mode }) {
               </thead>
 
               <tbody>
-                {filteredLevels.map((lvl) => (
-                  <tr
-                    key={lvl.id}
-                    onClick={() => handleSelectLevel(lvl.id)}
-                    className="border-t border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors"
-                  >
-                    <td className="px-6 py-4 text-sm text-gray-900 truncate max-w-xs">
-                      {lvl.name || "Untitled Level"}
-                      {isLevelProtected(lvl) && (
-                        <span className="ml-2 text-yellow-600">🔒</span>
-                      )}
-                    </td>
-
-                    <td className="px-6 py-4 text-sm text-gray-600 truncate max-w-xs">
-                      {lvl.author || "Unknown"}
-                    </td>
-
-                    <td className="px-6 py-4 text-sm text-gray-600 truncate max-w-xs">
-                      {Array.isArray(lvl.keywords)
-                        ? lvl.keywords.join(", ")
-                        : lvl.keywords || "None"}
-                    </td>
-
-                    {!playMode && (
-                      <td className="px-6 py-4 text-sm">
-                        <span
-                          className={
-                            lvl.isPublished
-                              ? "text-green-600"
-                              : "text-orange-600"
-                          }
-                        >
-                          {lvl.isPublished ? "✅ Published" : "❌ Draft"}
-                        </span>
+                {filteredLevels.map((lvl) => {
+                  // Debug: log the level object to see its structure
+                  console.log("Level object:", lvl);
+                  
+                  return (
+                    <tr
+                      key={lvl.id}
+                      onClick={() => handleSelectLevel(lvl.id)}
+                      className="border-t border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors"
+                    >
+                      <td className="px-6 py-4 text-sm text-gray-900 truncate max-w-xs">
+                        {lvl.name || "Untitled Level"}
+                        {isLevelProtected(lvl) && (
+                          <span className="ml-2 text-yellow-600">🔒</span>
+                        )}
                       </td>
-                    )}
-                  </tr>
-                ))}
+
+                      <td className="px-6 py-4 text-sm text-gray-600 truncate max-w-xs">
+                        {lvl.author || "Unknown"}
+                      </td>
+
+                      <td className="px-6 py-4 text-sm text-gray-600 truncate max-w-xs">
+                        {Array.isArray(lvl.keywords)
+                          ? lvl.keywords.join(", ")
+                          : lvl.keywords || "None"}
+                      </td>
+
+                      {!playMode && (
+                        <td className="px-6 py-4 text-sm">
+                          <span
+                            className={
+                              lvl.isPublished
+                                ? "text-green-600"
+                                : "text-orange-600"
+                            }
+                          >
+                            {lvl.isPublished ? "✅ Published" : "❌ Draft"}
+                          </span>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

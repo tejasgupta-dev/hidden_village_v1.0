@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/firebase/firebaseAdmin";
-import { requireSession } from "@/lib/firebase/requireSession";
+import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
@@ -13,26 +13,18 @@ Modes supported:
 4. Delete mode (owner/admin/pin)
 */
 
-
-/* ===============================
-   Helper: check admin
-================================ */
-function isAdmin(user) {
-  return (
-    user?.roles?.includes("admin") ||
-    user?.customClaims?.roles?.includes("admin")
-  );
-}
-
-
 /* ===============================
    GET – Preview or Access Level
 ================================ */
 export async function GET(req, context) {
   try {
-    const id = await context?.params?.id;
+    // FIX: Properly await and extract the parameter
+    // The parameter name must match your folder name: [id] or [levelId]
+    const params = await context.params;
+    const id = params.id || params.levelId;
 
-    if (!id) {
+    // FIX: Check for empty string, null, or undefined explicitly
+    if (!id || id === "") {
       return NextResponse.json(
         { success: false, message: "Level ID required" },
         { status: 400 }
@@ -110,10 +102,11 @@ export async function PATCH(req, context) {
   if (!success) return response;
 
   try {
+    // FIX: Properly await and extract the parameter
+    const params = await context.params;
+    const id = params.id || params.levelId;
 
-    const id = context?.params?.id;
-
-    if (!id) {
+    if (!id || id === "") {
       return NextResponse.json(
         { success: false, message: "Level ID required" },
         { status: 400 }
@@ -233,10 +226,11 @@ export async function DELETE(req, context) {
   if (!success) return response;
 
   try {
+    // FIX: Properly await and extract the parameter
+    const params = await context.params;
+    const id = params.id || params.levelId;
 
-    const id = context?.params?.id;
-
-    if (!id) {
+    if (!id || id === "") {
       return NextResponse.json(
         { success: false, message: "Level ID required" },
         { status: 400 }
