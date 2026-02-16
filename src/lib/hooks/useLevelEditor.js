@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { levelEditorApi } from "@/lib/api/levelEditorApi";
+import { levelEditorApi, storePin } from "@/lib/api/levelEditorApi";
 
 export const useLevelEditor = (levelId, isNew, userEmail) => {
   const router = useRouter();
@@ -38,31 +38,22 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     if (levelId) loadLevel(levelId);
   }, [levelId, isNew]);
 
-  const loadLevel = async (id) => {
+  const loadLevel = async (id, explicitPin = null) => {
     setLoadingLevel(true);
 
     try {
-      const savedPin =
-        typeof window !== "undefined"
-          ? sessionStorage.getItem("editorPin")
-          : null;
-
-      const options = savedPin ? { pin: savedPin } : {};
-
+      // Pass explicit pin if provided (after prompt); otherwise
+      // levelEditorApi.load() will automatically read from sessionStorage.
+      const options = explicitPin ? { pin: explicitPin } : {};
       const result = await levelEditorApi.load(id, options);
 
       if (!result.success) {
-        if (
-          result.code === "PIN_REQUIRED" ||
-          result.code === "INVALID_PIN"
-        ) {
-          const enteredPin = prompt(
-            "This level is PIN protected. Enter PIN:"
-          );
+        if (result.code === "PIN_REQUIRED" || result.code === "INVALID_PIN") {
+          const enteredPin = prompt("This level is PIN protected. Enter PIN:");
 
           if (enteredPin) {
-            sessionStorage.setItem("editorPin", enteredPin);
-            loadLevel(id);
+            storePin(id, enteredPin); // use consistent key
+            loadLevel(id, enteredPin);
             return;
           }
         }
@@ -73,13 +64,11 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
       }
 
       if (result.preview) {
-        const enteredPin = prompt(
-          "This level is PIN protected. Enter PIN:"
-        );
+        const enteredPin = prompt("This level is PIN protected. Enter PIN:");
 
         if (enteredPin) {
-          sessionStorage.setItem("editorPin", enteredPin);
-          loadLevel(id);
+          storePin(id, enteredPin);
+          loadLevel(id, enteredPin);
           return;
         }
 
@@ -115,6 +104,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
             isPublished: publish,
           });
         } else {
+          // PIN is sent automatically via the header inside levelEditorApi.save()
           result = await levelEditorApi.save(level.id, {
             ...level,
             isPublished: publish,
@@ -122,16 +112,11 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         }
 
         if (!result.success) {
-          if (
-            result.code === "PIN_REQUIRED" ||
-            result.code === "INVALID_PIN"
-          ) {
-            const enteredPin = prompt(
-              "This level requires a PIN. Enter PIN:"
-            );
+          if (result.code === "PIN_REQUIRED" || result.code === "INVALID_PIN") {
+            const enteredPin = prompt("This level requires a PIN. Enter PIN:");
 
             if (enteredPin) {
-              sessionStorage.setItem("editorPin", enteredPin);
+              storePin(level.id, enteredPin);
               handleSave(publish);
               return;
             }
@@ -163,6 +148,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     if (!window.confirm("Delete this level?")) return;
 
     try {
+      // PIN sent automatically inside levelEditorApi.delete()
       const result = await levelEditorApi.delete(level.id);
 
       if (!result.success) {
