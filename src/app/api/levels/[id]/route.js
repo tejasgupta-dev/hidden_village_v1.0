@@ -102,7 +102,6 @@ export async function PATCH(req, context) {
   if (!success) return response;
 
   try {
-    // FIX: Properly await and extract the parameter
     const params = await context.params;
     const id = params.id || params.levelId;
 
@@ -144,6 +143,8 @@ export async function PATCH(req, context) {
 
       const providedPin =
         req.headers.get("x-level-pin");
+
+      console.log("Provided pin:", providedPin)
 
       if (!providedPin) {
         return NextResponse.json(

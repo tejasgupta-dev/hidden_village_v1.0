@@ -1,14 +1,19 @@
 export async function apiClient(url, options = {}) {
   try {
+    const {
+      headers: customHeaders = {},
+      ...rest
+    } = options;
+
     const res = await fetch(url, {
+      ...rest,
       headers: {
         "Content-Type": "application/json",
-        ...(options.headers || {}),
+        ...customHeaders,
       },
-      ...options,
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
       const error = new Error(data.message || "API Error");

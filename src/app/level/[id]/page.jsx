@@ -262,7 +262,7 @@ export default function LevelEditPage() {
       <div className="flex gap-3 flex-wrap items-center">
         <button
           disabled={savingLevel}
-          onClick={() => handleSave("", false)}
+          onClick={() => handleSave(false)}
           className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {savingLevel ? "Saving..." : "Save Draft"}
@@ -270,7 +270,7 @@ export default function LevelEditPage() {
 
         <button
           disabled={savingLevel}
-          onClick={() => handleSave("", true)}
+          onClick={() => handleSave(true)}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {savingLevel ? "Publishing..." : "Publish"}

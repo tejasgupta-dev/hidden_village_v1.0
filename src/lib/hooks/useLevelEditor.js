@@ -42,33 +42,54 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     setLoadingLevel(true);
 
     try {
-      // Try to load with saved PIN if available
-      const savedPin = sessionStorage.getItem("editorPin");
+      const savedPin =
+        typeof window !== "undefined"
+          ? sessionStorage.getItem("editorPin")
+          : null;
+
       const options = savedPin ? { pin: savedPin } : {};
 
-      const { success, level: data } = await levelEditorApi.load(id, options);
+      const result = await levelEditorApi.load(id, options);
 
-      if (!success) {
-        alert("Failed to load level.");
+      if (!result.success) {
+        if (
+          result.code === "PIN_REQUIRED" ||
+          result.code === "INVALID_PIN"
+        ) {
+          const enteredPin = prompt(
+            "This level is PIN protected. Enter PIN:"
+          );
+
+          if (enteredPin) {
+            sessionStorage.setItem("editorPin", enteredPin);
+            loadLevel(id);
+            return;
+          }
+        }
+
+        alert(result.message || "Failed to load level.");
         router.replace("/level/menu");
         return;
       }
 
-      setLevel({ ...data, id });
-    } catch (err) {
-      console.error(err);
-      
-      // Check if PIN is required
-      if (err.message.includes("PIN")) {
-        const enteredPin = prompt("This level is PIN protected. Please enter the PIN:");
+      if (result.preview) {
+        const enteredPin = prompt(
+          "This level is PIN protected. Enter PIN:"
+        );
+
         if (enteredPin) {
           sessionStorage.setItem("editorPin", enteredPin);
-          // Retry loading with PIN
           loadLevel(id);
           return;
         }
+
+        router.replace("/level/menu");
+        return;
       }
-      
+
+      setLevel({ ...result.level, id });
+    } catch (err) {
+      console.error(err);
       alert("Unexpected error loading level.");
       router.replace("/level/menu");
     } finally {
@@ -76,97 +97,10 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     }
   };
 
-  /* ================= POSES ================= */
-
-  const addPose = () => {
-    const newKey = `pose_${Date.now()}`;
-
-    setLevel((prev) => ({
-      ...prev,
-      poses: {
-        ...(prev.poses || {}),
-        [newKey]: "",
-      },
-    }));
-  };
-
-  const updatePose = (key, value) => {
-    setLevel((prev) => ({
-      ...prev,
-      poses: {
-        ...prev.poses,
-        [key]: value,
-      },
-    }));
-  };
-
-  const removePose = (key) => {
-    setLevel((prev) => {
-      const newPoses = { ...prev.poses };
-      delete newPoses[key];
-
-      return {
-        ...prev,
-        poses: newPoses,
-      };
-    });
-  };
-
-  /* ================= OPTIONS ================= */
-
-  const addOption = () => {
-    setLevel((prev) => ({
-      ...prev,
-      options: [...(prev.options || []), ""],
-    }));
-  };
-
-  const updateOption = (index, value) => {
-    setLevel((prev) => {
-      const newOptions = [...prev.options];
-      newOptions[index] = value;
-
-      return {
-        ...prev,
-        options: newOptions,
-      };
-    });
-  };
-
-  const removeOption = (index) => {
-    setLevel((prev) => {
-      const newOptions = prev.options.filter((_, i) => i !== index);
-
-      const newAnswers = prev.answers
-        .filter((a) => a !== index)
-        .map((a) => (a > index ? a - 1 : a));
-
-      return {
-        ...prev,
-        options: newOptions,
-        answers: newAnswers,
-      };
-    });
-  };
-
-  const toggleAnswer = (index) => {
-    setLevel((prev) => {
-      const currentAnswers = prev.answers || [];
-      const exists = currentAnswers.includes(index);
-
-      return {
-        ...prev,
-        answers: exists
-          ? currentAnswers.filter((a) => a !== index)
-          : [...currentAnswers, index],
-      };
-    });
-  };
-
   /* ================= SAVE ================= */
 
   const handleSave = useCallback(
-    async (enteredPin = "", publish = false) => {
+    async (publish = false) => {
       if (!level) return;
 
       setSavingLevel(true);
@@ -176,66 +110,46 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         let result;
 
         if (!level.id) {
-          // CREATE
           result = await levelEditorApi.create({
-            name: level.name,
-            keywords: level.keywords,
-            poses: level.poses,
-            description: level.description,
-            question: level.question,
-            options: level.options,
-            answers: level.answers,
+            ...level,
             isPublished: publish,
-            pin: level.pin ?? "",
           });
         } else {
-          // UPDATE
           result = await levelEditorApi.save(level.id, {
-            name: level.name,
-            keywords: level.keywords,
-            poses: level.poses,
-            description: level.description,
-            question: level.question,
-            options: level.options,
-            answers: level.answers,
+            ...level,
             isPublished: publish,
-            pin: level.pin ?? "",
           });
         }
 
         if (!result.success) {
-          setMessage(result.message || "Failed to save level.");
+          if (
+            result.code === "PIN_REQUIRED" ||
+            result.code === "INVALID_PIN"
+          ) {
+            const enteredPin = prompt(
+              "This level requires a PIN. Enter PIN:"
+            );
+
+            if (enteredPin) {
+              sessionStorage.setItem("editorPin", enteredPin);
+              handleSave(publish);
+              return;
+            }
+          }
+
+          setMessage(result.message || "Failed to save.");
           return;
         }
 
-        if (enteredPin) {
-          sessionStorage.setItem("editorPin", enteredPin);
-        }
-
-        // If newly created, redirect to edit page
         if (!level.id && result.id) {
-          const newId = result.id;
-          setLevel((prev) => ({ ...prev, id: newId }));
-          router.replace(`/level/edit/${newId}`);
+          router.replace(`/level/edit/${result.id}`);
           return;
         }
 
         alert(publish ? "Level published!" : "Draft saved!");
       } catch (err) {
         console.error(err);
-        
-        // Handle PIN errors
-        if (err.message.includes("PIN")) {
-          const enteredPin = prompt("This level is PIN protected. Please enter the PIN:");
-          if (enteredPin) {
-            sessionStorage.setItem("editorPin", enteredPin);
-            // Retry save with PIN
-            handleSave(enteredPin, publish);
-            return;
-          }
-        }
-        
-        setMessage("Unexpected error saving level.");
+        setMessage("Unexpected error saving.");
       } finally {
         setSavingLevel(false);
       }
@@ -249,10 +163,10 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     if (!window.confirm("Delete this level?")) return;
 
     try {
-      const { success, message: msg } = await levelEditorApi.delete(level.id);
+      const result = await levelEditorApi.delete(level.id);
 
-      if (!success) {
-        alert(msg || "Failed to delete level.");
+      if (!result.success) {
+        alert(result.message || "Failed to delete.");
         return;
       }
 
@@ -260,14 +174,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
       router.replace("/level/menu");
     } catch (err) {
       console.error(err);
-      
-      // Handle PIN errors
-      if (err.message.includes("PIN")) {
-        alert("You don't have permission to delete this level.");
-        return;
-      }
-      
-      alert("Unexpected error deleting level.");
+      alert("Unexpected error deleting.");
     }
   };
 
@@ -279,13 +186,6 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     loadingLevel,
     savingLevel,
     message,
-    addPose,
-    updatePose,
-    removePose,
-    addOption,
-    updateOption,
-    removeOption,
-    toggleAnswer,
     handleSave,
     handleDelete,
     handleBack,
