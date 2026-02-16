@@ -306,6 +306,7 @@ export function useGameEditor(id, isNew = false, userEmail) {
 
   return {
     game,
+    setGame,
     loadingGame,
     savingGame,
     allAvailableLevels,
