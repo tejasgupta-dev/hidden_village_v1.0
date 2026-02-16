@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   MoveUp,
   MoveDown,
@@ -25,21 +25,32 @@ import StorylineEditor from "@/components/storylineEditor";
 function EditableField({
   label,
   field,
-  game,
-  editingField,
-  editValue,
-  setEditValue,
-  startEditing,
-  saveEdit,
-  cancelEdit,
+  value,
+  onSave,
 }) {
-  const value = game[field] || "";
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(value);
+
+  const startEditing = () => {
+    setEditValue(value);
+    setIsEditing(true);
+  };
+
+  const saveEdit = () => {
+    onSave(field, editValue);
+    setIsEditing(false);
+  };
+
+  const cancelEdit = () => {
+    setEditValue(value);
+    setIsEditing(false);
+  };
 
   return (
     <div className="space-y-1">
       <label className="text-sm font-medium">{label}</label>
 
-      {editingField === field ? (
+      {isEditing ? (
         <div className="flex gap-2 items-center">
           <input
             value={editValue}
@@ -66,7 +77,7 @@ function EditableField({
           <Edit
             className="cursor-pointer text-gray-400 hover:text-gray-700 shrink-0"
             size={16}
-            onClick={() => startEditing(field, value)}
+            onClick={startEditing}
           />
         </div>
       )}
@@ -80,6 +91,7 @@ function EditableField({
 
 export default function GameEditor() {
   const pathname = usePathname();
+  const router = useRouter();
   const id = pathname.split("/").filter(Boolean).pop();
   const { user } = useAuth();
 
@@ -89,34 +101,70 @@ export default function GameEditor() {
     loadingGame,
     savingGame,
     allAvailableLevels,
-    expandedLevel,
-    showAddLevel,
-    setShowAddLevel,
-    editingField,
-    editValue,
-    setEditValue,
-    startEditing,
-    saveEdit,
-    cancelEdit,
     addLevel,
     removeLevel,
-    moveLevel,
-    toggleExpandLevel,
     getLevelData,
     handleSave,
     handleDelete,
-    handleBack,
   } = useGameEditor(id, false, user?.email);
 
+  // UI-specific state
   const [showStorylineEditor, setShowStorylineEditor] = useState(false);
+  const [showAddLevel, setShowAddLevel] = useState(false);
   const [newLevelId, setNewLevelId] = useState("");
+  const [expandedLevel, setExpandedLevel] = useState(null);
 
-  function handleAddLevel() {
+  /* -------------------------------------------------------
+     HANDLERS
+  ------------------------------------------------------- */
+
+  const handleBack = () => {
+    router.push("/");
+  };
+
+  const handleFieldSave = (field, value) => {
+    setGame((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAddLevel = () => {
     const trimmed = newLevelId.trim();
     if (!trimmed) return;
     addLevel(trimmed);
     setNewLevelId("");
-  }
+    setShowAddLevel(false);
+  };
+
+  const moveLevel = (index, direction) => {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= (game.levelIds ?? []).length) return;
+
+    setGame((prev) => {
+      const newLevelIds = [...(prev.levelIds || [])];
+      const newStoryline = [...(prev.storyline || [])];
+
+      // Swap levels
+      [newLevelIds[index], newLevelIds[newIndex]] = [
+        newLevelIds[newIndex],
+        newLevelIds[index],
+      ];
+
+      // Swap storyline
+      [newStoryline[index], newStoryline[newIndex]] = [
+        newStoryline[newIndex],
+        newStoryline[index],
+      ];
+
+      return {
+        ...prev,
+        levelIds: newLevelIds,
+        storyline: newStoryline,
+      };
+    });
+  };
+
+  const toggleExpandLevel = (levelId) => {
+    setExpandedLevel((prev) => (prev === levelId ? null : levelId));
+  };
 
   /* -------------------------------------------------------
      LOADING / NOT FOUND
@@ -144,7 +192,6 @@ export default function GameEditor() {
 
   return (
     <div className="min-h-screen py-6 px-4 max-w-5xl mx-auto space-y-6">
-
       {/* HEADER */}
       <div className="flex justify-between items-center">
         <button
@@ -164,46 +211,26 @@ export default function GameEditor() {
         <EditableField
           label="Game Name"
           field="name"
-          game={game}
-          editingField={editingField}
-          editValue={editValue}
-          setEditValue={setEditValue}
-          startEditing={startEditing}
-          saveEdit={saveEdit}
-          cancelEdit={cancelEdit}
+          value={game.name || ""}
+          onSave={handleFieldSave}
         />
         <EditableField
           label="Description"
           field="description"
-          game={game}
-          editingField={editingField}
-          editValue={editValue}
-          setEditValue={setEditValue}
-          startEditing={startEditing}
-          saveEdit={saveEdit}
-          cancelEdit={cancelEdit}
+          value={game.description || ""}
+          onSave={handleFieldSave}
         />
         <EditableField
           label="Keywords"
           field="keywords"
-          game={game}
-          editingField={editingField}
-          editValue={editValue}
-          setEditValue={setEditValue}
-          startEditing={startEditing}
-          saveEdit={saveEdit}
-          cancelEdit={cancelEdit}
+          value={game.keywords || ""}
+          onSave={handleFieldSave}
         />
         <EditableField
           label="PIN"
           field="pin"
-          game={game}
-          editingField={editingField}
-          editValue={editValue}
-          setEditValue={setEditValue}
-          startEditing={startEditing}
-          saveEdit={saveEdit}
-          cancelEdit={cancelEdit}
+          value={game.pin || ""}
+          onSave={handleFieldSave}
         />
       </div>
 
@@ -243,8 +270,7 @@ export default function GameEditor() {
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(allAvailableLevels)
                     .filter(
-                      ([levelId]) =>
-                        !(game.levelIds ?? []).includes(levelId)
+                      ([levelId]) => !(game.levelIds ?? []).includes(levelId)
                     )
                     .map(([levelId, levelData]) => (
                       <button
@@ -373,9 +399,7 @@ export default function GameEditor() {
               {/* EXPANDED LEVEL DETAILS */}
               {expandedLevel === levelId && levelData && (
                 <div className="border-t px-3 pb-3 pt-2 bg-gray-50 text-sm text-gray-600 space-y-1">
-                  {levelData.description && (
-                    <p>{levelData.description}</p>
-                  )}
+                  {levelData.description && <p>{levelData.description}</p>}
                   {!levelData.description && (
                     <p className="italic text-gray-400">No description.</p>
                   )}

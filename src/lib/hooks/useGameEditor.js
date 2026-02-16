@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import gameEditorApi from "@/lib/api/gameEditorApi";
+import { gameEditor } from "../domain/games/gameEditor";
 
 /*
    useGameEditor hook
-   - Uses gameEditorApi for CRUD
+   - Uses gameEditor domain layer for CRUD
    - Handles preview mode and PIN
+   - Manages local state and UI interactions
 */
 export function useGameEditor(id, isNew = false, userEmail) {
   const router = useRouter();
@@ -22,8 +23,6 @@ export function useGameEditor(id, isNew = false, userEmail) {
   const getStoredPin = () => sessionStorage.getItem(`game_pin_${id}`) || "";
   const setStoredPin = (pin) => sessionStorage.setItem(`game_pin_${id}`, pin);
   const clearStoredPin = () => sessionStorage.removeItem(`game_pin_${id}`);
-
-  const buildPinHeader = (pin) => (pin ?? getStoredPin()) ? { "x-game-pin": pin ?? getStoredPin() } : {};
 
   /* ------------------ LOAD GAME ------------------ */
   const loadGame = useCallback(async () => {
@@ -46,7 +45,7 @@ export function useGameEditor(id, isNew = false, userEmail) {
 
       // Try loading game with stored PIN
       let storedPin = getStoredPin();
-      let response = await gameEditorApi.load(id, { pin: storedPin });
+      let response = await gameEditor.load(id, { pin: storedPin });
 
       // Handle preview mode / PIN required
       if (response.preview) {
@@ -56,7 +55,7 @@ export function useGameEditor(id, isNew = false, userEmail) {
           return;
         }
 
-        response = await gameEditorApi.load(id, { pin });
+        response = await gameEditor.load(id, { pin });
         if (!response.success) {
           alert("Invalid PIN");
           router.push("/");
@@ -73,7 +72,6 @@ export function useGameEditor(id, isNew = false, userEmail) {
       }
 
       setGame(response.game);
-
     } catch (err) {
       console.error("Error loading game", err);
       alert("Error loading game");
@@ -104,16 +102,22 @@ export function useGameEditor(id, isNew = false, userEmail) {
 
     try {
       let response;
+      const pin = getStoredPin(); // Get stored PIN for updates
+
       if (isNew) {
-        response = await gameEditorApi.create({ ...game, isPublished: publish });
+        response = await gameEditor.create({ ...game, isPublished: publish });
         if (response.success) router.push(`/game/edit/${response.game.id}`);
       } else {
-        response = await gameEditorApi.save(game.id, { ...game, isPublished: publish });
+        // Pass PIN in options for protected games
+        response = await gameEditor.save(
+          game.id,
+          { ...game, isPublished: publish },
+          { pin }
+        );
       }
 
       if (!response.success) throw new Error("Save failed");
       setGame(response.game);
-
     } catch (err) {
       console.error("Error saving game", err);
       alert("Error saving game");
@@ -126,7 +130,8 @@ export function useGameEditor(id, isNew = false, userEmail) {
   const handleDelete = async () => {
     if (!confirm("Delete this game?")) return;
     try {
-      const response = await gameEditorApi.delete(id);
+      const pin = getStoredPin(); // Get stored PIN for deletion
+      const response = await gameEditor.delete(id, { pin });
       if (!response.success) throw new Error("Delete failed");
       clearStoredPin();
       router.push("/");

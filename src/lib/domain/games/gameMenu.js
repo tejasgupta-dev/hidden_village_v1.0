@@ -1,27 +1,24 @@
-import { apiClient } from "./apiClient";
+import { gamesApi } from "./games.api";
 
-/*
-   For browsing, listing, and selecting games
-*/
-export const gameMenuApi = {
+/**
+ * Domain logic for browsing and selecting games
+ * Public-facing operations
+ */
+export const gameMenu = {
   /**
    * List all published games (public, no auth required)
-   * Returns minimal game info for menu display
-   * @returns {Promise<{success: boolean, games: Array<{id, name, keywords}>}>}
+   * @returns {Promise<{success: boolean, games: Array}>}
    */
   async listPublic() {
-    return apiClient("/api/games?mode=public");
+    return gamesApi.list({ mode: "public" });
   },
 
   /**
    * List all games for management (requires auth)
-   * Returns all games with ownership info
    * @returns {Promise<{success: boolean, games: Array}>}
    */
   async listManage() {
-    return apiClient("/api/games", {
-      credentials: "include",
-    });
+    return gamesApi.list({}, { credentials: "include" });
   },
 
   /**
@@ -29,14 +26,26 @@ export const gameMenuApi = {
    * @param {string} gameId - The game ID
    * @returns {Promise<{success: boolean, game: Object}>}
    */
-  async getGamePreview(gameId) {
-    return apiClient(`/api/games/${gameId}?mode=play`);
+  async getPreview(gameId) {
+    return gamesApi.get(gameId, {
+      params: { mode: "play" },
+    });
+  },
+
+  /**
+   * Get a game for playing (may require PIN)
+   * @param {string} gameId - The game ID
+   * @param {Object} options - Options
+   * @param {string} options.pin - PIN for protected games
+   * @returns {Promise<{success: boolean, game: Object}>}
+   */
+  async getForPlay(gameId, options = {}) {
+    return gamesApi.get(gameId, {
+      pin: options.pin,
+      params: { mode: "play" },
+    });
   },
 };
-
-/* 
-   HELPER FUNCTIONS FOR MENU
-*/
 
 /**
  * Search games by keyword
@@ -106,19 +115,17 @@ export function sortGames(games, sortBy = "name", order = "asc") {
  * @param {boolean} published - Filter for published games
  * @returns {Array} Filtered games
  */
-export function filterGamesByStatus(games, published) {
+export function filterByStatus(games, published) {
   return games.filter((game) => game.isPublished === published);
 }
 
 /**
- * NOTE: Better to use regex from gamesList as this involves heavy computing!
- * 
  * Get games by author
  * @param {Array} games - Array of games
  * @param {string} authorUid - Author UID
  * @returns {Array} Filtered games
  */
-export function getGamesByAuthor(games, authorUid) {
+export function filterByAuthor(games, authorUid) {
   return games.filter((game) => game.authorUid === authorUid);
 }
 
@@ -127,7 +134,7 @@ export function getGamesByAuthor(games, authorUid) {
  * @param {Object} game - Game object
  * @returns {boolean}
  */
-export function isGamePublished(game) {
+export function isPublished(game) {
   return game?.isPublished === true;
 }
 
@@ -136,7 +143,7 @@ export function isGamePublished(game) {
  * @param {Object} game - Game object
  * @returns {boolean}
  */
-export function isGameProtected(game) {
+export function isProtected(game) {
   return Boolean(game?.pin && game.pin.length > 0);
 }
 
@@ -146,7 +153,7 @@ export function isGameProtected(game) {
  * @param {string} userUid - User UID
  * @returns {boolean}
  */
-export function isGameOwner(game, userUid) {
+export function isOwner(game, userUid) {
   return game?.authorUid === userUid;
 }
 
@@ -155,7 +162,7 @@ export function isGameOwner(game, userUid) {
  * @param {Object} game - Game object
  * @returns {Object} Formatted game
  */
-export function formatGameForMenu(game) {
+export function formatForMenu(game) {
   return {
     id: game.id,
     name: game.name || "Untitled Game",
@@ -163,11 +170,11 @@ export function formatGameForMenu(game) {
     keywords: game.keywords || "",
     levelCount: game.levelIds?.length || 0,
     isPublished: game.isPublished || false,
-    hasPin: isGameProtected(game),
+    hasPin: isProtected(game),
     author: game.author || "Anonymous",
     createdAt: game.createdAt,
     updatedAt: game.updatedAt,
   };
 }
 
-export default gameMenuApi;
+export default gameMenu;
