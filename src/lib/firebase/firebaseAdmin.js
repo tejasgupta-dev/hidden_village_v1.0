@@ -27,17 +27,3 @@ export { auth, db };
 export async function verifySession(sessionCookie) {
   return auth.verifySessionCookie(sessionCookie, true);
 }
-
-export async function promoteToAdmin(uid) {
-  const user = await auth.getUser(uid);
-  const currentRoles = user.customClaims?.roles || [];
-
-  if (!currentRoles.includes("admin")) {
-    await auth.setCustomUserClaims(uid, {
-      ...user.customClaims,
-      roles: [...currentRoles, "admin"],
-    });
-  }
-
-  return true;
-}
