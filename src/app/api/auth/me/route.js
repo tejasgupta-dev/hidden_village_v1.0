@@ -3,9 +3,15 @@ import { requireSession } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
+/**
+ * GET /api/auth/me
+ * 
+ * Returns the currently authenticated user's basic information.
+ * Requires a valid Firebase session cookie.
+ */
 export async function GET() {
   const { success, user, response } = await requireSession();
-  
+
   if (!success) {
     return response;
   }

@@ -4,17 +4,22 @@ import { auth } from "@/lib/firebase/firebaseAdmin";
 
 export const runtime = "nodejs";
 
+/**
+ * PATCH /api/users/[uid]
+ * 
+ * Promotes or demotes a user to/from admin role.
+ * Only accessible by admins.
+ */
 export async function PATCH(req, context) {
-
+  // Ensure requester is an admin
   const { success, user, response } = await requireAdmin(req);
   if (!success) return response;
 
   try {
 
-    const { uid } = await context.params;
-
+    const { uid } = await context.params; // Extract user ID from URL
     const body = await req.json();
-    const action = body?.action;
+    const action = body?.action; // Expect "promote" or "demote"
 
     if (!uid) {
       return NextResponse.json(
@@ -71,14 +76,19 @@ export async function PATCH(req, context) {
 
 }
 
-
+/**
+ * DELETE /api/users/[uid]
+ * 
+ * Deletes a user from Firebase Auth.
+ * Only accessible by admins and cannot delete self.
+ */
 export async function DELETE(req, context) {
-
+  // Ensure requester is an admin
   const { success, user, response } = await requireAdmin(req);
   if (!success) return response;
 
   try {
-
+    // Extract user ID from URL
     const { uid } = await context.params;
 
     if (!uid) {
@@ -103,14 +113,10 @@ export async function DELETE(req, context) {
     });
 
   } catch (err) {
-
     console.error(err);
-
     return NextResponse.json(
       { success: false, message: err.message },
       { status: 500 }
     );
-
   }
-
 }
