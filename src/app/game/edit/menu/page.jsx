@@ -1,131 +1,227 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Plus } from "lucide-react";
 
-export default function GameMenu() {
+function GameMenu({ mode }) {
   const router = useRouter();
+
+  const playMode = mode === "play";
+  const editMode = mode === "edit";
 
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
 
-  const handleBack = () => router.back();
+  // PIN modal
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [selectedGameId, setSelectedGameId] = useState(null);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [pinLoading, setPinLoading] = useState(false);
 
+  /* =========================================
+     FETCH GAMES
+  ========================================= */
   useEffect(() => {
+    let mounted = true;
+
     const fetchGames = async () => {
       try {
+        setLoading(true);
+        setError(null);
+
         const res = await fetch("/api/games", {
-          method: "GET",
           credentials: "include",
         });
 
-        if (res.status === 401) {
-          router.push("/auth/signIn?redirect=/game");
-          return;
-        }
-
         const data = await res.json();
 
-        if (!res.ok || !data.success) {
-          setError(data.message || "Failed to load games.");
+        if (!mounted) return;
+
+        if (!data.success || !Array.isArray(data.games)) {
+          setGames([]);
           return;
         }
 
-        setGames(data.games || []);
+        const filtered = playMode
+          ? data.games.filter((g) => g.isPublished)
+          : data.games;
+
+        setGames(filtered || []);
       } catch (err) {
-        console.error("Error fetching games:", err);
-        setError("Failed to load games.");
+        console.error(err);
+        if (mounted) setError("Failed to load games.");
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
     fetchGames();
-  }, [router]);
+    return () => (mounted = false);
+  }, [playMode]);
 
-  // Filter games
-  const filteredGames = games.filter((game) => {
+  /* =========================================
+     SEARCH
+  ========================================= */
+  const filteredGames = useMemo(() => {
+    if (!Array.isArray(games)) return [];
+
     try {
       const reg = new RegExp(search, "i");
-      return (
-        reg.test(game.name || "") ||
-        reg.test(game.author || "") ||
-        reg.test(game.keywords || "")
+      return games.filter(
+        (g) =>
+          reg.test(g.name || "") ||
+          reg.test(g.author || "") ||
+          reg.test(g.keywords || "")
       );
     } catch {
-      return true;
+      return games;
     }
-  });
+  }, [games, search]);
 
-  // Navigate to edit page
-  const handleSelectGame = (id) => {
-    router.push(`/game/edit/${id}`);
+  /* =========================================
+     NAVIGATION
+  ========================================= */
+  const navigateToGame = (id, verifiedPin = null) => {
+    if (!id) return;
+
+    if (verifiedPin) {
+      sessionStorage.setItem(`game_pin_${id}`, verifiedPin);
+    }
+
+    if (playMode) {
+      router.push(`/game/${id}`);
+    } else {
+      router.push(`/game/edit/${id}`);
+    }
   };
 
-  // Create new game
-  const handleCreateNew = () => {
-    router.push("/game/create");
+  /* =========================================
+     SELECT GAME
+  ========================================= */
+  const handleSelectGame = async (id) => {
+    try {
+      const res = await fetch(`/api/games/${id}`, {
+        credentials: "include",
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        alert(data.message || "Failed to load game.");
+        return;
+      }
+
+      if (data.hasPin) {
+        setSelectedGameId(id);
+        setShowPinModal(true);
+        setPin("");
+        setPinError("");
+        return;
+      }
+
+      navigateToGame(id);
+    } catch (err) {
+      console.error(err);
+      alert("Error loading game.");
+    }
   };
+
+  /* =========================================
+     PIN SUBMIT
+  ========================================= */
+  const handlePinSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!pin.trim()) {
+      setPinError("Please enter PIN");
+      return;
+    }
+
+    setPinLoading(true);
+    setPinError("");
+
+    try {
+      const res = await fetch(`/api/games/${selectedGameId}`, {
+        headers: {
+          "x-game-pin": pin,
+        },
+        credentials: "include",
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setShowPinModal(false);
+        navigateToGame(selectedGameId, pin);
+      } else {
+        setPinError("Incorrect PIN");
+      }
+    } catch (err) {
+      setPinError("Error verifying PIN");
+    } finally {
+      setPinLoading(false);
+    }
+  };
+
+  const closePinModal = () => {
+    setShowPinModal(false);
+    setSelectedGameId(null);
+    setPin("");
+    setPinError("");
+  };
+
+  /* =========================================
+     RENDER
+  ========================================= */
 
   if (loading)
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3"></div>
-          <p className="text-gray-900 text-sm">Loading games...</p>
-        </div>
-      </div>
-    );
+    return <p className="text-center text-gray-600">Loading games...</p>;
 
   if (error)
-    return (
-      <p className="text-center text-xl py-8 text-red-600">
-        ⚠️ {error}
-      </p>
-    );
+    return <p className="text-center text-red-600">⚠️ {error}</p>;
 
   return (
-    <div className="w-full flex flex-col items-center overflow-x-hidden relative min-h-screen bg-gray-50">
-      <div className="w-full flex justify-between items-center px-5 my-6">
-        <button
-          onClick={handleBack}
-          className="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium text-sm"
-        >
-          <ArrowLeft size={18} /> Back
-        </button>
-
-        <h2 className="text-5xl font-semibold text-gray-900 flex-1 text-center">
-          Edit Games
+    <>
+      <div className="container mx-auto px-4 py-8">
+        <h2 className="text-3xl font-bold mb-6">
+          {playMode ? "Play Games" : "Edit Games"}
         </h2>
 
-        <button
-          onClick={handleCreateNew}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm"
-        >
-          <Plus size={18} /> New Game
-        </button>
-      </div>
+        <input
+          placeholder="Search by name, author, or keyword"
+          className="w-full px-4 py-2 mb-6 border rounded-lg"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
 
-      <input
-        placeholder="Search by name, author, or keyword"
-        className="self-end mr-5 mb-8 w-1/4 min-w-[200px] h-10 px-4 text-lg text-gray-900 placeholder-gray-500 rounded-full border border-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-
-      {games.length > 0 ? (
-        filteredGames.length > 0 ? (
-          <div className="w-[90%] overflow-x-auto">
-            <table className="w-full border-separate border-spacing-y-3 text-lg table-fixed">
-              <thead>
-                <tr className="text-gray-900">
-                  <th className="w-1/3">Name</th>
-                  <th className="w-1/3">Author</th>
-                  <th className="w-1/6">Keywords</th>
-                  <th className="w-1/6">Published</th>
+        {filteredGames.length === 0 ? (
+          <p className="text-center text-gray-600 py-8">
+            {playMode
+              ? "No published games available"
+              : "No games found"}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full bg-white border rounded-lg">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-6 py-3 text-left text-sm font-semibold">
+                    Name
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold">
+                    Author
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold">
+                    Keywords
+                  </th>
+                  {!playMode && (
+                    <th className="px-6 py-3 text-left text-sm font-semibold">
+                      Status
+                    </th>
+                  )}
                 </tr>
               </thead>
 
@@ -134,46 +230,94 @@ export default function GameMenu() {
                   <tr
                     key={game.id}
                     onClick={() => handleSelectGame(game.id)}
-                    className="cursor-pointer group"
+                    className="border-t hover:bg-gray-50 cursor-pointer"
                   >
-                    <td className="bg-white px-4 py-3 text-center text-gray-900 shadow rounded-l-xl truncate group-hover:bg-gray-100">
+                    <td className="px-6 py-4">
                       {game.name || "Untitled Game"}
+                      {game.hasPin && (
+                        <span className="ml-2 text-yellow-600">🔒</span>
+                      )}
                     </td>
 
-                    <td className="bg-white px-4 py-3 text-center text-gray-900 shadow truncate group-hover:bg-gray-100">
+                    <td className="px-6 py-4">
                       {game.author || "Unknown"}
                     </td>
 
-                    <td className="bg-white px-4 py-3 text-center text-gray-900 shadow truncate group-hover:bg-gray-100">
+                    <td className="px-6 py-4">
                       {game.keywords || "None"}
                     </td>
 
-                    <td className="bg-white px-4 py-3 text-center shadow rounded-r-xl truncate group-hover:bg-gray-100">
-                      <span className={game.isPublished ? "text-green-600" : "text-orange-500"}>
-                        {game.isPublished ? "✅" : "❌"}
-                      </span>
-                    </td>
+                    {!playMode && (
+                      <td className="px-6 py-4">
+                        <span
+                          className={
+                            game.isPublished
+                              ? "text-green-600"
+                              : "text-orange-600"
+                          }
+                        >
+                          {game.isPublished
+                            ? "✅ Published"
+                            : "❌ Draft"}
+                        </span>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ) : (
-          <p className="pt-[10vh] text-gray-900 text-2xl text-center">
-            No games match your search
-          </p>
-        )
-      ) : (
-        <div className="pt-[10vh] text-center">
-          <p className="text-gray-900 text-2xl mb-4">No games found</p>
-          <button
-            onClick={handleCreateNew}
-            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-          >
-            Create Your First Game
-          </button>
+        )}
+      </div>
+
+      {/* PIN MODAL */}
+      {showPinModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-xl font-bold mb-4">
+              Protected Game
+            </h3>
+
+            <form onSubmit={handlePinSubmit}>
+              <input
+                type="password"
+                placeholder="Enter PIN"
+                className="w-full px-4 py-2 border rounded mb-4"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                autoFocus
+              />
+
+              {pinError && (
+                <p className="text-red-600 text-sm mb-4">
+                  {pinError}
+                </p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={closePinModal}
+                  className="flex-1 border rounded py-2"
+                  disabled={pinLoading}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  className="flex-1 bg-blue-600 text-white rounded py-2"
+                  disabled={pinLoading}
+                >
+                  {pinLoading ? "Verifying..." : "Submit"}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
+
+export default GameMenu;
