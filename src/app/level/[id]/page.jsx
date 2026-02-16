@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { Check, X, Plus, Trash2, Camera } from "lucide-react";
 import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
+import { getStoredPin } from "@/lib/api/levelEditorApi";
 import PoseCapture from "@/components/Pose/poseCapture";
 
 export default function LevelEditPage() {
@@ -29,7 +30,7 @@ export default function LevelEditPage() {
     handleSave,
     handleDelete,
     handleBack,
-  } = useLevelEditor(levelId, false, user?.email); // isNew = false for edit
+  } = useLevelEditor(levelId, false, user?.email);
 
   const [editingPin, setEditingPin] = useState(false);
   const [pinValue, setPinValue] = useState("");
@@ -37,12 +38,16 @@ export default function LevelEditPage() {
 
   const pinRef = useRef(null);
 
-  // Sync pinValue with level.pin when level loads
+  // Sync pinValue when level loads:
+  // Use level.pin if API returns it, otherwise fall back to the session PIN
+  // the user entered to unlock this level.
   useEffect(() => {
-    if (level.pin) {
-      setPinValue(level.pin);
-    }
-  }, [level.pin]);
+    const sessionPin = getStoredPin(levelId);
+    setPinValue(level.pin || sessionPin || "");
+  }, [level.pin, levelId]);
+
+  // True if any source tells us a PIN exists
+  const hasPin = Boolean(level.pin) || Boolean(level.hasPin) || Boolean(getStoredPin(levelId));
 
   if (loadingLevel) {
     return (
@@ -117,11 +122,11 @@ export default function LevelEditPage() {
           <div className="flex gap-2">
             <input
               ref={pinRef}
-              type="password"
+              type="text"
               value={pinValue}
               onChange={(e) => setPinValue(e.target.value)}
               placeholder="Enter PIN (min 4 characters)"
-              className="border p-2 flex-1 rounded"
+              className="border p-2 flex-1 rounded font-mono"
             />
             <button
               onClick={() => {
@@ -134,7 +139,7 @@ export default function LevelEditPage() {
             </button>
             <button
               onClick={() => {
-                setPinValue(level.pin || "");
+                setPinValue(level.pin || getStoredPin(levelId) || "");
                 setEditingPin(false);
               }}
               className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500"
@@ -143,20 +148,36 @@ export default function LevelEditPage() {
             </button>
           </div>
         ) : (
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {/* Always show the raw PIN value if we have it */}
+            {pinValue ? (
+              <span className="font-mono text-sm bg-gray-100 border px-3 py-2 rounded text-gray-800">
+                {pinValue}
+              </span>
+            ) : hasPin ? (
+              <span className="text-sm text-gray-400 italic px-3 py-2">
+                PIN set (not returned by server)
+              </span>
+            ) : (
+              <span className="text-sm text-gray-400 px-3 py-2">No PIN set</span>
+            )}
+
             <button
               onClick={() => {
-                setPinValue(level.pin || "");
                 setEditingPin(true);
                 setTimeout(() => pinRef.current?.focus(), 0);
               }}
               className="border px-3 py-2 rounded hover:bg-gray-100"
             >
-              {level.pin ? "🔒 Change PIN" : "🔓 Set PIN"}
+              {hasPin ? "🔒 Change PIN" : "🔓 Set PIN"}
             </button>
-            {level.pin && (
+
+            {hasPin && (
               <button
-                onClick={() => setLevel((prev) => ({ ...prev, pin: "" }))}
+                onClick={() => {
+                  setLevel((prev) => ({ ...prev, pin: "" }));
+                  setPinValue("");
+                }}
                 className="text-red-600 hover:text-red-800 px-3 py-2"
               >
                 Remove PIN
