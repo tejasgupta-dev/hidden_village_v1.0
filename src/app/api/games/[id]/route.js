@@ -4,11 +4,15 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-/* =========================================================
-   GET ONE GAME
-   ========================================================= */
+/**
+ * GET /games/[id]
+ * Fetches a game by ID. Handles different modes:
+ *  - mode=play: only published games are accessible
+ *  - default: returns preview or full game data based on permissions
+ */
 export async function GET(req, context) {
   try {
+    // Extract game ID from URL
     const { id } = await context.params;
 
     if (!id) {
@@ -32,9 +36,6 @@ export async function GET(req, context) {
 
     const game = snapshot.val();
 
-    /* ===============================
-       PUBLIC PLAY MODE
-    =============================== */
     if (mode === "play") {
       if (!game.isPublished) {
         return NextResponse.json(
@@ -43,6 +44,7 @@ export async function GET(req, context) {
         );
       }
 
+      // Return limited game data for playing
       return NextResponse.json({
         success: true,
         game: {
@@ -57,24 +59,24 @@ export async function GET(req, context) {
       });
     }
 
-    /* ===============================
-       AUTHENTICATED / EDIT MODE
-    =============================== */
-
+    // Require session for full access
     const { success, user, response } = await requireSession();
     if (!success) return response;
 
-    const userIsAdmin = isAdmin(user);
-    const isOwner = game.authorUid === user.uid;
+    const userIsAdmin = isAdmin(user); // Check if user is admin
+    const isOwner = game.authorUid === user.uid; // Check ownership
 
+    // Check if game has PIN
     const pinRequired =
       typeof game.pin === "string" &&
       game.pin.length > 0;
 
+    // PIN from request headers
     const providedPin = req.headers.get("x-game-pin");
 
     // Owner or Admin always allowed
     if (isOwner || userIsAdmin) {
+      // Exclude PIN from response
       const { pin, ...safeGame } = game;
 
       return NextResponse.json({
@@ -124,7 +126,7 @@ export async function GET(req, context) {
     });
 
   } catch (err) {
-    console.error("❌ GET /games/[id] error:", err);
+    console.error("GET /games/[id] error:", err);
     return NextResponse.json(
       { success: false, message: "Failed to fetch game." },
       { status: 500 }
@@ -133,9 +135,11 @@ export async function GET(req, context) {
 }
 
 
-/* =========================================================
-   PATCH – Update Game
-   ========================================================= */
+/**
+ * PATCH /games/[id]
+ * Updates a game by ID.
+ * Permissions: owner, admin, or PIN access
+ */
 export async function PATCH(req, context) {
 
   const { success, user, response } = await requireSession();
@@ -264,7 +268,7 @@ export async function PATCH(req, context) {
     });
 
   } catch (err) {
-    console.error("❌ PATCH /games/[id] error:", err);
+    console.error("PATCH /games/[id] error:", err);
     return NextResponse.json(
       { success: false, message: "Failed to update game." },
       { status: 500 }
@@ -273,9 +277,11 @@ export async function PATCH(req, context) {
 }
 
 
-/* =========================================================
-   DELETE – Delete Game
-   ========================================================= */
+/**
+ * DELETE /games/[id]
+ * Deletes a game by ID.
+ * Permissions: owner, admin, or PIN access
+ */
 export async function DELETE(req, context) {
 
   const { success, user, response } = await requireSession();

@@ -4,6 +4,7 @@ import { requireSession } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
+// GET handler — fetches all levels from the Realtime Database
 export async function GET(req) {
   try {
     const snapshot = await db.ref("LevelList").get();
@@ -38,7 +39,9 @@ export async function GET(req) {
   }
 }
 
+// POST handler — creates a new level
 export async function POST(req) {
+  // Ensure the user is logged in
   const { success, user, response } = await requireSession(req);
   if (!success) return response;
 

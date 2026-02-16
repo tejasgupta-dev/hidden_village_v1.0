@@ -3,10 +3,13 @@ import { db } from "@/lib/firebase/firebaseAdmin";
 
 export const runtime = "nodejs";
 
-/* ===============================
-   GET – Get Game Levels (Public)
-   Returns all levels for a published game
-================================ */
+/* GET – Fetch Game Levels (Public)
+   Returns all levels for a published game.
+   - Route: /games/[id]/levels
+   - Public: no authentication required
+   - Only returns levels for published games
+   - Strips sensitive data (PIN, author info, timestamps)
+*/
 export async function GET(req, context) {
   try {
     const { id } = await context.params;
@@ -81,14 +84,14 @@ export async function GET(req, context) {
       })
       .filter((level) => level !== null); // Remove null entries for missing levels
 
-    console.log(`🎮 Returned ${levels.length} levels for game ${id}`);
+    console.log(`Returned ${levels.length} levels for game ${id}`);
 
     return NextResponse.json({
       success: true,
       levels,
     });
   } catch (err) {
-    console.error("❌ GET /games/[id]/levels error:", err);
+    console.error("GET /games/[id]/levels error:", err);
     return NextResponse.json(
       {
         success: false,

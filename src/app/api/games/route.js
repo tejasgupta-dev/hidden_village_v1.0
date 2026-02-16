@@ -4,11 +4,19 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
+/**
+ * GET /games
+ * 
+ * Fetches a list of games.
+ * - If query param ?mode=public is set, returns only published games without requiring login (for game menu)
+ * - Otherwise, requires a valid user session and returns all games with general details (for edit menu)
+ */
 export async function GET(req) {
   try {
     const url = new URL(req.url);
     const mode = url.searchParams.get("mode");
 
+    // PUBLIC MODE: return only published games
     if (mode === "public") {
       const snapshot = await db.ref("GameList").get();
       if (!snapshot.exists()) {
@@ -19,12 +27,14 @@ export async function GET(req) {
       }
       const rawData = snapshot.val();
 
+      // Filter published games and return basic info
       const games = Object.entries(rawData)
         .filter(([_, game]) => game.isPublished === true)
         .map(([id, game]) => ({
           id,
           name: game.name ?? "",
           keywords: game.keywords ?? "",
+          author: game.author ?? "",
         }));
 
       return NextResponse.json({
@@ -33,6 +43,7 @@ export async function GET(req) {
       });
     }
 
+    // PRIVATE MODE: requires session
     const { success, user, response } = await requireSession();
     if (!success) return response;
 
@@ -47,6 +58,7 @@ export async function GET(req) {
 
     const rawData = snapshot.val();
 
+    // Return all games with general details for authenticated users
     const games = Object.entries(rawData).map(([id, game]) => ({
       id,
       name: game.name ?? "",
@@ -61,7 +73,7 @@ export async function GET(req) {
       games,
     });
   } catch (err) {
-    console.error("❌ GET /games error:", err);
+    console.error("GET /games error:", err);
     return NextResponse.json(
       {
         success: false,
@@ -72,7 +84,14 @@ export async function GET(req) {
   }
 }
 
+/**
+ * POST /games
+ * 
+ * Creates a new game in the database.
+ * Requires a valid user session.
+ */
 export async function POST(req) {
+  // Ensure the requester is authenticated
   const { success, user, response } = await requireSession();
   if (!success) return response;
 
@@ -122,10 +141,12 @@ export async function POST(req) {
       );
     }
 
+    // Create a new database reference for the game
     const newRef = db.ref("Games").push();
     const gameId = newRef.key;
     const timestamp = Date.now();
 
+    // Construct game data object
     const gameData = {
       name,
       description,
@@ -141,6 +162,7 @@ export async function POST(req) {
       updatedAt: timestamp,
     };
 
+    // Write to both Games (full data) and GameList (summary for listing)
     await db.ref().update({
       [`Games/${gameId}`]: gameData,
       [`GameList/${gameId}`]: {
@@ -152,6 +174,7 @@ export async function POST(req) {
       },
     });
 
+    // Exclude PIN from the response for security
     const { pin: _, ...safeGame } = gameData;
 
     return NextResponse.json({
@@ -163,7 +186,7 @@ export async function POST(req) {
       },
     });
   } catch (err) {
-    console.error("❌ POST /games error:", err);
+    console.error("POST /games error:", err);
     return NextResponse.json(
       {
         success: false,

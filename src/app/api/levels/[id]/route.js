@@ -4,6 +4,12 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
+/* GET – Fetch Level
+   - If no PIN provided → return preview info only
+   - If PIN required and incorrect → deny access
+   - If PIN correct or no PIN → return full level data
+   - PIN is NEVER returned to client
+*/
 export async function GET(req, context) {
   try {
     const params = await context.params;
@@ -77,7 +83,9 @@ export async function GET(req, context) {
   }
 }
 
-
+/* PATCH – Update Level
+  Author, Admin, or valid Pin has full access
+*/
 export async function PATCH(req, context) {
 
   const { success, user, response } = await requireSession(req);
@@ -112,10 +120,7 @@ export async function PATCH(req, context) {
 
     let hasPermission = false;
 
-    if (
-      existingLevel.authorUid === user.uid ||
-      isAdmin(user)
-    ) {
+    if (existingLevel.authorUid === user.uid || isAdmin(user)) {
       hasPermission = true;
     }
 
@@ -123,8 +128,6 @@ export async function PATCH(req, context) {
 
       const providedPin =
         req.headers.get("x-level-pin");
-
-      console.log("Provided pin:", providedPin)
 
       if (!providedPin) {
         return NextResponse.json(
@@ -198,16 +201,15 @@ export async function PATCH(req, context) {
 }
 
 
-/* ===============================
-   DELETE – Delete Level
-================================ */
+/* DELETE – Delete Level
+  Author, Admin, or valid Pin has full access
+*/
 export async function DELETE(req, context) {
 
   const { success, user, response } = await requireSession(req);
   if (!success) return response;
 
   try {
-    // FIX: Properly await and extract the parameter
     const params = await context.params;
     const id = params.id || params.levelId;
 
@@ -283,6 +285,7 @@ export async function DELETE(req, context) {
       );
     }
 
+    // Delete level permanently
     await ref.remove();
 
     return NextResponse.json({
