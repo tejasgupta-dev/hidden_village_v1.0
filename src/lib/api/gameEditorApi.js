@@ -1,15 +1,9 @@
 import { apiClient } from "./apiClient";
 
-/* ===============================
-   GAME EDITOR API
+/* 
    For creating, editing, and managing games
-================================ */
-
+ */
 export const gameEditorApi = {
-  /* ===============================
-     GET GAME FOR EDITING
-  ================================ */
-
   /**
    * Get a game for editing (requires auth)
    * @param {string} gameId - The game ID
@@ -34,9 +28,9 @@ export const gameEditorApi = {
     });
   },
 
-  /* ===============================
+  /* 
      CREATE GAME
-  ================================ */
+  */
 
   /**
    * Create a new game (requires auth)
@@ -59,10 +53,9 @@ export const gameEditorApi = {
     });
   },
 
-  /* ===============================
+  /*
      UPDATE GAME
-  ================================ */
-
+  */
   /**
    * Save changes to a game (requires auth and ownership)
    * @param {string} gameId - The game ID
@@ -85,10 +78,9 @@ export const gameEditorApi = {
     });
   },
 
-  /* ===============================
+  /*
      DELETE GAME
-  ================================ */
-
+   */
   /**
    * Delete a game (requires auth and ownership)
    * @param {string} gameId - The game ID
@@ -101,9 +93,9 @@ export const gameEditorApi = {
     });
   },
 
-  /* ===============================
+  /*
      CONVENIENCE METHODS
-  ================================ */
+  */
 
   /**
    * Publish a game
@@ -257,10 +249,9 @@ export const gameEditorApi = {
   },
 };
 
-/* ===============================
+/*
    HELPER FUNCTIONS FOR EDITOR
-================================ */
-
+*/
 /**
  * Validate game name
  * @param {string} name - Game name

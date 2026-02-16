@@ -1,15 +1,9 @@
 import { apiClient } from "./apiClient";
 
-/* ===============================
-   GAMES MENU API
+/*
    For browsing, listing, and selecting games
-================================ */
-
+*/
 export const gameMenuApi = {
-  /* ===============================
-     LIST GAMES
-  ================================ */
-
   /**
    * List all published games (public, no auth required)
    * Returns minimal game info for menu display
@@ -40,9 +34,9 @@ export const gameMenuApi = {
   },
 };
 
-/* ===============================
+/* 
    HELPER FUNCTIONS FOR MENU
-================================ */
+*/
 
 /**
  * Search games by keyword
@@ -117,6 +111,8 @@ export function filterGamesByStatus(games, published) {
 }
 
 /**
+ * NOTE: Better to use regex from gamesList as this involves heavy computing!
+ * 
  * Get games by author
  * @param {Array} games - Array of games
  * @param {string} authorUid - Author UID

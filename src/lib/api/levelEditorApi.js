@@ -1,10 +1,9 @@
 import { apiClient } from "./apiClient";
 
-/* ===============================
+/*
    PIN STORAGE HELPERS
    Consistent key: `level_pin_${levelId}`
-================================ */
-
+*/
 function getStoredPin(levelId) {
   if (typeof window === "undefined") return null;
   return sessionStorage.getItem(`level_pin_${levelId}`);
@@ -20,16 +19,12 @@ function buildPinHeaders(levelId) {
   return pin ? { "x-level-pin": pin } : {};
 }
 
-/* ===============================
+/*
    LEVEL EDITOR API
    For creating, editing, and managing levels
-================================ */
+*/
 
 export const levelEditorApi = {
-  /* ===============================
-     GET LEVEL FOR EDITING
-  ================================ */
-
   /**
    * Load a level for editing (requires auth)
    * PIN is read automatically from sessionStorage
@@ -45,10 +40,6 @@ export const levelEditorApi = {
     });
   },
 
-  /* ===============================
-     CREATE LEVEL
-  ================================ */
-
   async create(levelData) {
     return apiClient("/api/levels", {
       method: "POST",
@@ -56,10 +47,6 @@ export const levelEditorApi = {
       body: JSON.stringify(levelData),
     });
   },
-
-  /* ===============================
-     UPDATE LEVEL
-  ================================ */
 
   /**
    * Save changes — PIN sent automatically from sessionStorage
@@ -73,10 +60,6 @@ export const levelEditorApi = {
     });
   },
 
-  /* ===============================
-     DELETE LEVEL
-  ================================ */
-
   /**
    * Delete — PIN sent automatically from sessionStorage
    */
@@ -88,10 +71,9 @@ export const levelEditorApi = {
     });
   },
 
-  /* ===============================
+  /*
      CONVENIENCE METHODS
-  ================================ */
-
+  */
   async publish(levelId) {
     return this.save(levelId, { isPublished: true });
   },
@@ -173,15 +155,11 @@ export const levelEditorApi = {
   },
 };
 
-/* ===============================
-   PIN STORAGE — exported for use in hooks/pages
-================================ */
 export { getStoredPin, storePin };
 
-/* ===============================
+/*
    HELPER FUNCTIONS FOR EDITOR
-================================ */
-
+*/
 export function validateLevelName(name) {
   if (!name || typeof name !== "string") {
     return { valid: false, error: "Name is required" };

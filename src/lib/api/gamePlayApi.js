@@ -1,15 +1,10 @@
 import { apiClient } from "./apiClient";
 
-/* ===============================
-   GAME PLAY API
+/*
    For loading and playing games
-================================ */
+ */
 
 export const gamePlayApi = {
-  /* ===============================
-     GET GAME DATA
-  ================================ */
-
   /**
    * Load a game for playing (public, no auth required)
    * Returns game data without sensitive info (PIN, author details, etc.)
@@ -19,10 +14,6 @@ export const gamePlayApi = {
   async load(gameId) {
     return apiClient(`/api/games/${gameId}?mode=play`);
   },
-
-  /* ===============================
-     LEVELS
-  ================================ */
 
   /**
    * Get all levels for a game
@@ -44,9 +35,9 @@ export const gamePlayApi = {
   },
 };
 
-/* ===============================
+/*
    HELPER FUNCTIONS FOR GAMEPLAY
-================================ */
+*/
 
 /**
  * Get game metadata for display

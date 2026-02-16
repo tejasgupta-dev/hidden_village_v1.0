@@ -2,56 +2,34 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import gameEditorApi from "@/lib/api/gameEditorApi";
 
+/*
+   useGameEditor hook
+   - Uses gameEditorApi for CRUD
+   - Handles preview mode and PIN
+*/
 export function useGameEditor(id, isNew = false, userEmail) {
   const router = useRouter();
 
-  /* =======================================================
-     CORE STATE
-  ======================================================= */
-
+  /* ------------------ CORE STATE ------------------ */
   const [game, setGame] = useState(null);
   const [loadingGame, setLoadingGame] = useState(true);
   const [savingGame, setSavingGame] = useState(false);
-
   const [allAvailableLevels, setAllAvailableLevels] = useState({});
 
-  /* =======================================================
-     UI STATE
-  ======================================================= */
+  /* ------------------ PIN STORAGE ------------------ */
+  const getStoredPin = () => sessionStorage.getItem(`game_pin_${id}`) || "";
+  const setStoredPin = (pin) => sessionStorage.setItem(`game_pin_${id}`, pin);
+  const clearStoredPin = () => sessionStorage.removeItem(`game_pin_${id}`);
 
-  const [showAddLevel, setShowAddLevel] = useState(false);
-  const [expandedLevel, setExpandedLevel] = useState(null);
+  const buildPinHeader = (pin) => (pin ?? getStoredPin()) ? { "x-game-pin": pin ?? getStoredPin() } : {};
 
-  const [editingField, setEditingField] = useState(null);
-  const [editValue, setEditValue] = useState("");
-
-  /* =======================================================
-     PIN STORAGE
-  ======================================================= */
-
-  const getStoredPin = () =>
-    sessionStorage.getItem(`game_pin_${id}`) || "";
-
-  const setStoredPin = (pin) =>
-    sessionStorage.setItem(`game_pin_${id}`, pin);
-
-  const clearStoredPin = () =>
-    sessionStorage.removeItem(`game_pin_${id}`);
-
-  const buildPinHeader = (pin) => {
-    const usePin = pin ?? getStoredPin();
-    return usePin ? { "x-game-pin": usePin } : {};
-  };
-
-  /* =======================================================
-     LOAD GAME
-  ======================================================= */
-
+  /* ------------------ LOAD GAME ------------------ */
   const loadGame = useCallback(async () => {
-    try {
-      setLoadingGame(true);
+    setLoadingGame(true);
 
+    try {
       if (isNew) {
         setGame({
           name: "",
@@ -60,35 +38,26 @@ export function useGameEditor(id, isNew = false, userEmail) {
           pin: "",
           levelIds: [],
           storyline: [],
-          published: false,
+          isPublished: false,
           author: userEmail || "",
         });
         return;
       }
 
-      let res = await fetch(`/api/games/${id}`, {
-        credentials: "include",
-        headers: buildPinHeader(),
-      });
+      // Try loading game with stored PIN
+      let storedPin = getStoredPin();
+      let response = await gameEditorApi.load(id, { pin: storedPin });
 
-      if (res.status === 401) {
-        router.push("/login");
-        return;
-      }
-
-      if (res.status === 403) {
-        const pin = prompt("Enter game PIN:");
+      // Handle preview mode / PIN required
+      if (response.preview) {
+        const pin = prompt("This game is protected. Enter PIN:");
         if (!pin) {
           router.push("/");
           return;
         }
 
-        res = await fetch(`/api/games/${id}`, {
-          credentials: "include",
-          headers: buildPinHeader(pin),
-        });
-
-        if (!res.ok) {
+        response = await gameEditorApi.load(id, { pin });
+        if (!response.success) {
           alert("Invalid PIN");
           router.push("/");
           return;
@@ -97,13 +66,16 @@ export function useGameEditor(id, isNew = false, userEmail) {
         setStoredPin(pin);
       }
 
-      if (!res.ok) throw new Error("Failed to load game");
+      if (!response.success) {
+        alert("Failed to load game");
+        router.push("/");
+        return;
+      }
 
-      const data = await res.json();
-      setGame(data.game);
+      setGame(response.game);
 
     } catch (err) {
-      console.error(err);
+      console.error("Error loading game", err);
       alert("Error loading game");
       router.push("/");
     } finally {
@@ -111,198 +83,82 @@ export function useGameEditor(id, isNew = false, userEmail) {
     }
   }, [id, isNew, router, userEmail]);
 
-  /* =======================================================
-     LOAD AVAILABLE LEVELS
-  ======================================================= */
-
-  const loadLevels = useCallback(async () => {
-    try {
-      const res = await fetch("/api/levels");
-      if (!res.ok) return;
-
-      const data = await res.json();
-      setAllAvailableLevels(data.levels || {});
-    } catch (err) {
-      console.error("Failed to load levels", err);
-    }
-  }, []);
-
-  /* =======================================================
-     SAVE
-  ======================================================= */
-
-  const handleSave = async (publish = false) => {
-    if (!game) return;
-
-    try {
-      setSavingGame(true);
-
-      const res = await fetch(
-        isNew ? "/api/games" : `/api/games/${id}`,
-        {
-          method: isNew ? "POST" : "PATCH",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            ...buildPinHeader(),
-          },
-          body: JSON.stringify({
-            ...game,
-            published: publish,
-          }),
+  /* ------------------ LEVEL DATA ACCESS ------------------ */
+  const getLevelData = useCallback(
+    (levelId) => {
+      return (
+        allAvailableLevels[levelId] || {
+          id: levelId,
+          name: "",
+          description: "",
         }
       );
+    },
+    [allAvailableLevels]
+  );
 
-      if (res.status === 401) {
-        router.push("/login");
-        return;
+  /* ------------------ SAVE GAME ------------------ */
+  const handleSave = async (publish = false) => {
+    if (!game) return;
+    setSavingGame(true);
+
+    try {
+      let response;
+      if (isNew) {
+        response = await gameEditorApi.create({ ...game, isPublished: publish });
+        if (response.success) router.push(`/game/edit/${response.game.id}`);
+      } else {
+        response = await gameEditorApi.save(game.id, { ...game, isPublished: publish });
       }
 
-      if (res.status === 403) {
-        alert("Permission denied");
-        return;
-      }
-
-      if (!res.ok) throw new Error("Save failed");
-
-      const data = await res.json();
-      setGame(data.game);
-
-      if (isNew) router.push(`/game/edit/${data.game.id}`);
+      if (!response.success) throw new Error("Save failed");
+      setGame(response.game);
 
     } catch (err) {
-      console.error(err);
+      console.error("Error saving game", err);
       alert("Error saving game");
     } finally {
       setSavingGame(false);
     }
   };
 
-  /* =======================================================
-     DELETE
-  ======================================================= */
-
+  /* ------------------ DELETE GAME ------------------ */
   const handleDelete = async () => {
     if (!confirm("Delete this game?")) return;
-
     try {
-      const res = await fetch(`/api/games/${id}`, {
-        method: "DELETE",
-        credentials: "include",
-        headers: buildPinHeader(),
-      });
-
-      if (!res.ok) throw new Error("Delete failed");
-
+      const response = await gameEditorApi.delete(id);
+      if (!response.success) throw new Error("Delete failed");
       clearStoredPin();
       router.push("/");
-
     } catch (err) {
-      console.error(err);
+      console.error("Error deleting game", err);
       alert("Error deleting game");
     }
   };
 
-  const handleBack = () => router.push("/");
-
-  /* =======================================================
-     FIELD EDITING
-  ======================================================= */
-
-  const startEditing = (field, value) => {
-    setEditingField(field);
-    setEditValue(value ?? "");
-  };
-
-  const saveEdit = () => {
-    if (!editingField) return;
-
-    setGame((prev) => ({
-      ...prev,
-      [editingField]: editValue,
-    }));
-
-    setEditingField(null);
-    setEditValue("");
-  };
-
-  const cancelEdit = () => {
-    setEditingField(null);
-    setEditValue("");
-  };
-
-  /* =======================================================
-     LEVEL MANAGEMENT
-  ======================================================= */
-
+  /* ------------------ LEVEL MANAGEMENT ------------------ */
   const addLevel = (levelId) => {
     setGame((prev) => ({
       ...prev,
       levelIds: [...(prev.levelIds || []), levelId],
       storyline: [...(prev.storyline || []), []],
     }));
-
-    setShowAddLevel(false);
   };
 
   const removeLevel = (index) => {
     setGame((prev) => {
       const newLevels = [...(prev.levelIds || [])];
       const newStory = [...(prev.storyline || [])];
-
       newLevels.splice(index, 1);
       newStory.splice(index, 1);
-
       return { ...prev, levelIds: newLevels, storyline: newStory };
     });
   };
 
-  const moveLevel = (index, direction) => {
-    setGame((prev) => {
-      const newLevels = [...(prev.levelIds || [])];
-      const newStory = [...(prev.storyline || [])];
-      const newIndex = index + direction;
-
-      if (newIndex < 0 || newIndex >= newLevels.length) return prev;
-
-      [newLevels[index], newLevels[newIndex]] = [
-        newLevels[newIndex],
-        newLevels[index],
-      ];
-
-      [newStory[index], newStory[newIndex]] = [
-        newStory[newIndex],
-        newStory[index],
-      ];
-
-      return { ...prev, levelIds: newLevels, storyline: newStory };
-    });
-  };
-
-  const toggleExpandLevel = (levelId) => {
-    setExpandedLevel((prev) =>
-      prev === levelId ? null : levelId
-    );
-  };
-
-  const getLevelData = (levelId) =>
-    allAvailableLevels[levelId] || {};
-
-  /* =======================================================
-     INIT
-  ======================================================= */
-
+  /* ------------------ INIT ------------------ */
   useEffect(() => {
     if (id || isNew) loadGame();
   }, [id, isNew, loadGame]);
-
-  useEffect(() => {
-    loadLevels();
-  }, [loadLevels]);
-
-  /* =======================================================
-     RETURN
-  ======================================================= */
 
   return {
     game,
@@ -310,22 +166,11 @@ export function useGameEditor(id, isNew = false, userEmail) {
     loadingGame,
     savingGame,
     allAvailableLevels,
-    expandedLevel,
-    showAddLevel,
-    setShowAddLevel,
-    editingField,
-    editValue,
-    setEditValue,
-    startEditing,
-    saveEdit,
-    cancelEdit,
-    addLevel,
-    removeLevel,
-    moveLevel,
-    toggleExpandLevel,
-    getLevelData,
+    loadGame,
     handleSave,
     handleDelete,
-    handleBack,
+    addLevel,
+    removeLevel,
+    getLevelData,
   };
 }

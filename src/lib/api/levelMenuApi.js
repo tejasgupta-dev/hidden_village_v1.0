@@ -1,15 +1,10 @@
 import { apiClient } from "./apiClient";
 
-/* ===============================
+/*
    LEVELS MENU API
    For browsing, listing, and selecting levels
-================================ */
-
+*/
 export const levelMenuApi = {
-  /* ===============================
-     LIST LEVELS
-  ================================ */
-
   /**
    * List all levels (public)
    * Returns metadata for all levels from LevelList
@@ -42,10 +37,9 @@ export const levelMenuApi = {
   },
 };
 
-/* ===============================
+/*
    HELPER FUNCTIONS FOR MENU
-================================ */
-
+*/
 /**
  * Search levels by keyword
  * @param {Array} levels - Array of levels
