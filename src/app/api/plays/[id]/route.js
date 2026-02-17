@@ -1,52 +1,50 @@
 import { NextResponse } from "next/server";
 
-import { ref, get, remove } from "firebase/database";
-
-import { db } from "@/lib/firebase/firebaseClient";
+import { db } from "@/lib/firebase/firebaseAdmin";
 import { requireAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-
-
 export async function GET(req, { params }) {
-
-  const { success, response } =
-    await requireAdmin(req);
-
+  const { success, response } = await requireAdmin(req);
   if (!success) return response;
 
-  const snap =
-    await get(ref(db, `plays/${params.playId}`));
+  const playId = params?.id;
+  if (!playId) {
+    return NextResponse.json(
+      { success: false, message: "Missing play id" },
+      { status: 400 }
+    );
+  }
 
-  if (!snap.exists())
+  const snap = await db.ref(`plays/${playId}`).once("value");
+
+  if (!snap.exists()) {
     return NextResponse.json(
       { success: false, message: "Not found" },
       { status: 404 }
     );
+  }
 
   return NextResponse.json({
-
     success: true,
-    play: snap.val()
-
+    play: snap.val(),
   });
-
 }
 
-
-
 export async function DELETE(req, { params }) {
-
-  const { success, response } =
-    await requireAdmin(req);
-
+  const { success, response } = await requireAdmin(req);
   if (!success) return response;
 
-  await remove(ref(db, `plays/${params.playId}`));
+  const playId = params?.id;
+  if (!playId) {
+    return NextResponse.json(
+      { success: false, message: "Missing play id" },
+      { status: 400 }
+    );
+  }
 
-  return NextResponse.json({
-    success: true
-  });
+  await db.ref(`plays/${playId}`).remove();
 
+  return NextResponse.json({ success: true });
 }

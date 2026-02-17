@@ -1,51 +1,52 @@
 import { NextResponse } from "next/server";
-
-import { ref, update } from "firebase/database";
-
-import { db } from "@/lib/firebase/firebaseClient";
-
+import { db } from "@/lib/firebase/firebaseAdmin";
 import { requireSession } from "@/lib/firebase/requireSession";
 import { requirePlayOwner } from "@/lib/firebase/requirePlayOwner";
 
 export const runtime = "nodejs";
 
-
 export async function POST(req, { params }) {
-
-  const { success, response, session } =
-    await requireSession(req);
-
+  const { success, response, user } = await requireSession(req);
   if (!success) return response;
 
-  const isOwner =
-    await requirePlayOwner(params.playId, session.uid);
+  const playId = params?.id;
+  if (!playId) {
+    return NextResponse.json(
+      { success: false, message: "Missing play id" },
+      { status: 400 }
+    );
+  }
 
-  if (!isOwner)
+  const isOwner = await requirePlayOwner(playId, user.uid);
+  if (!isOwner) {
     return NextResponse.json(
       { success: false, message: "Forbidden" },
       { status: 403 }
     );
+  }
 
-  const {
-    frames,
-    startIndex
-  } = await req.json();
+  const body = await req.json().catch(() => ({}));
+  const { frames, startIndex } = body;
+
+  if (!Array.isArray(frames) || typeof startIndex !== "number") {
+    return NextResponse.json(
+      { success: false, message: "Expected { frames: [], startIndex: number }" },
+      { status: 400 }
+    );
+  }
 
   const updates = {};
+  for (let i = 0; i < frames.length; i++) {
+    updates[`plays/${playId}/poseData/${startIndex + i}`] = {
+      ...frames[i],
+      createdAt: Date.now(),
+    };
+  }
 
-  frames.forEach((frame, i) => {
-
-    updates[
-      `plays/${params.playId}/poseData/${startIndex + i}`
-    ] = frame;
-
-  });
-
-  await update(ref(db), updates);
+  await db.ref().update(updates);
 
   return NextResponse.json({
     success: true,
-    nextIndex: startIndex + frames.length
+    nextIndex: startIndex + frames.length,
   });
-
 }
