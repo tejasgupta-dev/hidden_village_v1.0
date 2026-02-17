@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { Check, X, Plus, Trash2, Camera } from "lucide-react";
 import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
-import { getStoredPin } from "@/lib/api/levelEditorApi";
 import PoseCapture from "@/components/Pose/poseCapture";
 
 export default function LevelEditPage() {
@@ -30,6 +29,7 @@ export default function LevelEditPage() {
     handleSave,
     handleDelete,
     handleBack,
+    getStoredPin, // Now comes from the hook
   } = useLevelEditor(levelId, false, user?.email);
 
   const [editingPin, setEditingPin] = useState(false);
@@ -38,16 +38,15 @@ export default function LevelEditPage() {
 
   const pinRef = useRef(null);
 
-  // Sync pinValue when level loads:
-  // Use level.pin if API returns it, otherwise fall back to the session PIN
-  // the user entered to unlock this level.
+  // Sync pinValue when level loads
   useEffect(() => {
-    const sessionPin = getStoredPin(levelId);
+    const sessionPin = getStoredPin();
     setPinValue(level.pin || sessionPin || "");
-  }, [level.pin, levelId]);
+  }, [level.pin, levelId, getStoredPin]);
 
   // True if any source tells us a PIN exists
-  const hasPin = Boolean(level.pin) || Boolean(level.hasPin) || Boolean(getStoredPin(levelId));
+  const hasPin =
+    Boolean(level.pin) || Boolean(level.hasPin) || Boolean(getStoredPin());
 
   if (loadingLevel) {
     return (
@@ -74,7 +73,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
           value={level.name || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, name: e.target.value }))
+          }
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -85,7 +86,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
           value={level.keywords || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, keywords: e.target.value }))
+          }
           placeholder="puzzle, challenge, easy"
           className="border p-2 w-full rounded"
         />
@@ -96,7 +99,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Description</label>
         <textarea
           value={level.description || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, description: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, description: e.target.value }))
+          }
           placeholder="Describe this level..."
           className="border p-2 w-full rounded"
           rows={3}
@@ -108,7 +113,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
           value={level.question || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, question: e.target.value }))
+          }
           placeholder="What question should players answer?"
           className="border p-2 w-full rounded"
           rows={2}
@@ -117,7 +124,9 @@ export default function LevelEditPage() {
 
       {/* PIN */}
       <div className="mb-4">
-        <label className="block text-sm font-medium mb-2">PIN Protection</label>
+        <label className="block text-sm font-medium mb-2">
+          PIN Protection
+        </label>
         {editingPin ? (
           <div className="flex gap-2">
             <input
@@ -139,7 +148,7 @@ export default function LevelEditPage() {
             </button>
             <button
               onClick={() => {
-                setPinValue(level.pin || getStoredPin(levelId) || "");
+                setPinValue(level.pin || getStoredPin() || "");
                 setEditingPin(false);
               }}
               className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500"
@@ -149,7 +158,6 @@ export default function LevelEditPage() {
           </div>
         ) : (
           <div className="flex gap-2 items-center">
-            {/* Always show the raw PIN value if we have it */}
             {pinValue ? (
               <span className="font-mono text-sm bg-gray-100 border px-3 py-2 rounded text-gray-800">
                 {pinValue}
@@ -159,7 +167,9 @@ export default function LevelEditPage() {
                 PIN set (not returned by server)
               </span>
             ) : (
-              <span className="text-sm text-gray-400 px-3 py-2">No PIN set</span>
+              <span className="text-sm text-gray-400 px-3 py-2">
+                No PIN set
+              </span>
             )}
 
             <button
@@ -203,7 +213,9 @@ export default function LevelEditPage() {
           <div className="mb-3">
             <PoseCapture
               poses={level.poses || {}}
-              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
+              onPosesUpdate={(poses) =>
+                setLevel((prev) => ({ ...prev, poses }))
+              }
             />
           </div>
         )}
@@ -212,7 +224,9 @@ export default function LevelEditPage() {
           <div className="space-y-2">
             {Object.entries(level.poses).map(([key, val]) => (
               <div key={key} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-600 w-32 truncate">{key}:</span>
+                <span className="text-sm text-gray-600 w-32 truncate">
+                  {key}:
+                </span>
                 <input
                   value={typeof val === "string" ? val : JSON.stringify(val)}
                   disabled
@@ -232,7 +246,9 @@ export default function LevelEditPage() {
 
       {/* OPTIONS & ANSWERS */}
       <div className="mb-6">
-        <label className="block text-sm font-medium mb-2">Options & Answers</label>
+        <label className="block text-sm font-medium mb-2">
+          Options & Answers
+        </label>
 
         {level.options && level.options.length > 0 ? (
           <div className="space-y-2 mb-3">
@@ -305,7 +321,10 @@ export default function LevelEditPage() {
           Delete
         </button>
 
-        <button onClick={handleBack} className="border px-4 py-2 rounded hover:bg-gray-100">
+        <button
+          onClick={handleBack}
+          className="border px-4 py-2 rounded hover:bg-gray-100"
+        >
           Back
         </button>
 

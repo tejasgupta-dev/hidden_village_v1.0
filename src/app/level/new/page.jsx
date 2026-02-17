@@ -62,7 +62,9 @@ export default function NewLevelPage() {
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
           value={level.name || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, name: e.target.value }))
+          }
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -73,7 +75,9 @@ export default function NewLevelPage() {
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
           value={level.keywords || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, keywords: e.target.value }))
+          }
           placeholder="puzzle, challenge, easy"
           className="border p-2 w-full rounded"
         />
@@ -84,7 +88,9 @@ export default function NewLevelPage() {
         <label className="block text-sm font-medium mb-1">Description</label>
         <textarea
           value={level.description || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, description: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, description: e.target.value }))
+          }
           placeholder="Describe this level..."
           className="border p-2 w-full rounded"
           rows={3}
@@ -96,7 +102,9 @@ export default function NewLevelPage() {
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
           value={level.question || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, question: e.target.value }))
+          }
           placeholder="What question should players answer?"
           className="border p-2 w-full rounded"
           rows={2}
@@ -105,7 +113,9 @@ export default function NewLevelPage() {
 
       {/* PIN */}
       <div className="mb-4">
-        <label className="block text-sm font-medium mb-2">PIN Protection (Optional)</label>
+        <label className="block text-sm font-medium mb-2">
+          PIN Protection (Optional)
+        </label>
         {editingPin ? (
           <div className="flex gap-2">
             <input
@@ -175,7 +185,9 @@ export default function NewLevelPage() {
           <div className="mb-3">
             <PoseCapture
               poses={level.poses || {}}
-              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
+              onPosesUpdate={(poses) =>
+                setLevel((prev) => ({ ...prev, poses }))
+              }
             />
           </div>
         )}
@@ -184,7 +196,9 @@ export default function NewLevelPage() {
           <div className="space-y-2">
             {Object.entries(level.poses).map(([key, val]) => (
               <div key={key} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-600 w-32 truncate">{key}:</span>
+                <span className="text-sm text-gray-600 w-32 truncate">
+                  {key}:
+                </span>
                 <input
                   value={typeof val === "string" ? val : JSON.stringify(val)}
                   disabled
@@ -204,7 +218,9 @@ export default function NewLevelPage() {
 
       {/* OPTIONS & ANSWERS */}
       <div className="mb-6">
-        <label className="block text-sm font-medium mb-2">Options & Answers</label>
+        <label className="block text-sm font-medium mb-2">
+          Options & Answers
+        </label>
 
         {level.options && level.options.length > 0 ? (
           <div className="space-y-2 mb-3">
@@ -255,7 +271,7 @@ export default function NewLevelPage() {
       <div className="flex gap-3 flex-wrap items-center">
         <button
           disabled={savingLevel}
-          onClick={() => handleSave("", false)}
+          onClick={() => handleSave(false)}
           className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {savingLevel ? "Creating..." : "Create Draft"}
@@ -263,20 +279,23 @@ export default function NewLevelPage() {
 
         <button
           disabled={savingLevel}
-          onClick={() => handleSave("", true)}
+          onClick={() => handleSave(true)}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {savingLevel ? "Creating..." : "Create & Publish"}
         </button>
 
-        <button onClick={handleBack} className="border px-4 py-2 rounded hover:bg-gray-100">
+        <button
+          onClick={handleBack}
+          className="border px-4 py-2 rounded hover:bg-gray-100"
+        >
           Cancel
         </button>
       </div>
 
       <div className="mt-4 text-sm text-gray-500">
-        * After creating, you'll be redirected to the edit page where you can continue working on your
-        level.
+        * After creating, you'll be redirected to the edit page where you can
+        continue working on your level.
       </div>
     </div>
   );

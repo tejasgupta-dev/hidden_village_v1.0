@@ -2,12 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import {
-  levelMenuApi,
-  searchLevels,
-  filterLevelsByStatus,
-  isLevelProtected,
-} from "@/lib/api/levelMenuApi";
+import { levelMenu, searchLevels, filterByStatus, isProtected } from "@/lib/domain/levels/levelMenu";
 
 function LevelMenu({ mode }) {
   const router = useRouter();
@@ -37,7 +32,7 @@ function LevelMenu({ mode }) {
         setLoading(true);
         setError(null);
 
-        const res = await levelMenuApi.list();
+        const res = await levelMenu.list();
 
         if (!mounted) return;
 
@@ -49,7 +44,7 @@ function LevelMenu({ mode }) {
         // play = only published
         // edit = all levels
         const filtered = playMode
-          ? filterLevelsByStatus(res.levels, true)
+          ? filterByStatus(res.levels, true)
           : res.levels;
 
         setLevels(filtered || []);
@@ -89,7 +84,8 @@ function LevelMenu({ mode }) {
       sessionStorage.setItem(`level_pin_${levelId}`, verifiedPin);
     }
 
-    router.push(`/level/${levelId}`);
+    const path = editMode ? `/level/edit/${levelId}` : `/level/${levelId}`;
+    router.push(path);
   };
 
   // Click level → check if protected, then navigate
@@ -101,35 +97,25 @@ function LevelMenu({ mode }) {
 
     console.log("Selecting level with ID:", levelId);
 
-    try {
-      const res = await levelMenuApi.getPreview(levelId);
-
-      if (!res.success) {
-        alert("Failed to load level");
-        return;
-      }
-
-      if (res.hasPin) {
-        setSelectedLevelId(levelId);
-        setShowPinModal(true);
-        setPin("");
-        setPinError("");
-        return;
-      }
-
-      // No pin required
-      navigateToLevel(levelId);
-
-    } catch (err) {
-      console.error("Error in handleSelectLevel:", err);
-      alert("Error loading level: " + (err.message || "Unknown error"));
+    // Check if level is protected from the list data
+    const level = levels.find(l => l.id === levelId);
+    
+    if (level && isProtected(level)) {
+      setSelectedLevelId(levelId);
+      setShowPinModal(true);
+      setPin("");
+      setPinError("");
+      return;
     }
+
+    // No pin required, navigate directly
+    navigateToLevel(levelId);
   };
 
   // Handle PIN submission
   const handlePinSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!pin.trim()) {
       setPinError("Please enter a PIN");
       return;
@@ -140,7 +126,7 @@ function LevelMenu({ mode }) {
 
     try {
       // Verify PIN by getting level preview with PIN header
-      const res = await levelMenuApi.getPreview(selectedLevelId, { pin });
+      const res = await levelMenu.getPreview(selectedLevelId, { pin });
 
       if (res.success) {
         // PIN correct, close modal and navigate with verified PIN
@@ -216,9 +202,6 @@ function LevelMenu({ mode }) {
 
               <tbody>
                 {filteredLevels.map((lvl) => {
-                  // Debug: log the level object to see its structure
-                  console.log("Level object:", lvl);
-                  
                   return (
                     <tr
                       key={lvl.id}
@@ -227,7 +210,7 @@ function LevelMenu({ mode }) {
                     >
                       <td className="px-6 py-4 text-sm text-gray-900 truncate max-w-xs">
                         {lvl.name || "Untitled Level"}
-                        {isLevelProtected(lvl) && (
+                        {isProtected(lvl) && (
                           <span className="ml-2 text-yellow-600">🔒</span>
                         )}
                       </td>
