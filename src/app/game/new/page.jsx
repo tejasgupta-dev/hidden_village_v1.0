@@ -1,60 +1,81 @@
 "use client";
 
-import { useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import {
-  Edit2,
-  Plus,
-  Check,
-  X,
-  ArrowLeft,
-} from "lucide-react";
+import { useRef, useEffect, useMemo, useState, useCallback } from "react";
+import { Edit2, Plus, Check, X, ArrowLeft } from "lucide-react";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useGameEditor } from "@/lib/hooks/useGameEditor";
 
 export default function NewGame() {
-  const router = useRouter();
   const { user } = useAuth();
-  const editRef = useRef(null);
 
   // Always creating new game
   const isNew = true;
   const id = null;
 
-  const {
-    game,
-    loadingGame,
-    savingGame,
-    allAvailableLevels,
-    showAddLevel,
-    setShowAddLevel,
-    editingField,
-    editValue,
-    setEditValue,
-    startEditing,
-    saveEdit,
-    cancelEdit,
-    addLevel,
-    handleSave,
-    handleBack,
-  } = useGameEditor(id, isNew, user?.email);
+  const { game, setGame, loadingGame, savingGame, allAvailableLevels, addLevel, handleSave, handleBack } =
+    useGameEditor(id, isNew, user?.email);
 
-  // Auto-save when clicking outside inline editor
+  // Local UI state (because hook does not expose these)
+  const [showAddLevel, setShowAddLevel] = useState(false);
+
+  // Inline edit state (local)
+  const [editingField, setEditingField] = useState(null);
+  const [editValue, setEditValue] = useState("");
+
+  const editRef = useRef(null);
+  const actionsRef = useRef(null);
+
+  const startEditing = useCallback(
+    (fieldKey, value) => {
+      setEditingField(fieldKey);
+      setEditValue(value ?? "");
+    },
+    [setEditingField, setEditValue]
+  );
+
+  const cancelEdit = useCallback(() => {
+    setEditingField(null);
+    setEditValue("");
+  }, []);
+
+  const saveEdit = useCallback(() => {
+    if (!editingField) return;
+
+    setGame((prev) => {
+      if (!prev) return prev;
+
+      // If user is editing PIN, we still store it in game draft (new game case)
+      return {
+        ...prev,
+        [editingField]: editValue,
+      };
+    });
+
+    setEditingField(null);
+    setEditValue("");
+  }, [editingField, editValue, setGame]);
+
+  // Commit edit before Save/Publish/Back
+  const commitInlineEditIfNeeded = useCallback(() => {
+    if (editingField) saveEdit();
+  }, [editingField, saveEdit]);
+
+  // Auto-save when clicking outside inline editor (ignore clicks on action buttons/header)
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (editRef.current && !editRef.current.contains(event.target)) {
-        saveEdit();
-      }
+      if (!editingField) return;
+      if (editRef.current && editRef.current.contains(event.target)) return;
+      if (actionsRef.current && actionsRef.current.contains(event.target)) return;
+      saveEdit();
     };
 
-    if (editingField) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
+    if (editingField) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [editingField, saveEdit]);
+
+  const levelsList = useMemo(() => {
+    return Object.entries(allAvailableLevels || {});
+  }, [allAvailableLevels]);
 
   if (loadingGame) {
     return (
@@ -78,12 +99,14 @@ export default function NewGame() {
   return (
     <div className="min-h-screen bg-transparent py-4 px-3">
       <div className="max-w-5xl mx-auto space-y-4">
-        
         {/* HEADER */}
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
+        <div ref={actionsRef} className="bg-white rounded-lg border border-gray-300 p-4">
           <div className="flex items-center justify-between">
             <button
-              onClick={handleBack}
+              onClick={() => {
+                commitInlineEditIfNeeded();
+                handleBack();
+              }}
               className="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium text-sm"
             >
               <ArrowLeft size={18} /> Back
@@ -95,7 +118,7 @@ export default function NewGame() {
 
             <div className="w-20"></div>
           </div>
-          
+
           <p className="text-sm text-gray-600 text-center mt-2">
             {game.author || user?.email || ""}
           </p>
@@ -104,7 +127,7 @@ export default function NewGame() {
         {/* GAME INFO */}
         <div className="bg-white rounded-lg border border-gray-300 p-4 space-y-3">
           <h2 className="text-sm font-bold text-gray-900 mb-3">Game Info</h2>
-          
+
           <FieldEditor
             label="Name"
             value={game.name}
@@ -174,10 +197,12 @@ export default function NewGame() {
 
           {showAddLevel && (
             <div className="p-3 bg-gray-50 rounded border border-gray-300 mb-3">
-              <p className="font-semibold text-gray-900 text-sm mb-2">Select a level to add:</p>
+              <p className="font-semibold text-gray-900 text-sm mb-2">
+                Select a level to add:
+              </p>
 
               <div className="flex flex-col gap-2 max-h-60 overflow-y-auto">
-                {Object.entries(allAvailableLevels).map(([levelId, levelData]) => (
+                {levelsList.map(([levelId, levelData]) => (
                   <div
                     key={levelId}
                     className={`flex justify-between p-2 rounded border text-sm ${
@@ -185,14 +210,18 @@ export default function NewGame() {
                         ? "bg-gray-200 border-gray-300 cursor-not-allowed opacity-50"
                         : "bg-white border-gray-300 hover:border-blue-500 hover:bg-blue-50 cursor-pointer"
                     }`}
-                    onClick={() => !game.levelIds?.includes(levelId) && addLevel(levelId)}
+                    onClick={() => {
+                      if (game.levelIds?.includes(levelId)) return;
+                      commitInlineEditIfNeeded();
+                      addLevel(levelId);
+                    }}
                   >
-                    <span className="text-gray-900">{levelData.name || "Untitled Level"}</span>
-                    
+                    <span className="text-gray-900">
+                      {levelData.name || "Untitled Level"}
+                    </span>
+
                     {game.levelIds?.includes(levelId) && (
-                      <span className="text-green-600 font-semibold">
-                        ✓ Added
-                      </span>
+                      <span className="text-green-600 font-semibold">✓ Added</span>
                     )}
                   </div>
                 ))}
@@ -218,10 +247,13 @@ export default function NewGame() {
         </div>
 
         {/* ACTION BUTTONS */}
-        <div className="bg-white rounded-lg border border-gray-300 p-3">
+        <div ref={actionsRef} className="bg-white rounded-lg border border-gray-300 p-3">
           <div className="flex flex-wrap gap-2 justify-center">
             <button
-              onClick={() => handleSave(false)}
+              onClick={() => {
+                commitInlineEditIfNeeded();
+                handleSave(false);
+              }}
               disabled={savingGame}
               className="px-4 py-2 bg-gray-800 text-white text-sm font-semibold rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -229,7 +261,10 @@ export default function NewGame() {
             </button>
 
             <button
-              onClick={() => handleSave(true)}
+              onClick={() => {
+                commitInlineEditIfNeeded();
+                handleSave(true);
+              }}
               disabled={savingGame}
               className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -238,7 +273,10 @@ export default function NewGame() {
 
             <button
               className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-gray-50"
-              onClick={handleBack}
+              onClick={() => {
+                commitInlineEditIfNeeded();
+                handleBack();
+              }}
             >
               Back
             </button>
@@ -310,7 +348,9 @@ function FieldEditor({
           <>
             <span
               onDoubleClick={() => startEditing(fieldKey, value)}
-              className={`flex-1 text-sm cursor-pointer ${!value ? "text-gray-400 italic" : "text-gray-900"}`}
+              className={`flex-1 text-sm cursor-pointer ${
+                !value ? "text-gray-400 italic" : "text-gray-900"
+              }`}
             >
               {value || "Click to edit"}
             </span>

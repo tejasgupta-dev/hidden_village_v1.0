@@ -245,4 +245,48 @@ export const gameEditor = {
   },
 };
 
-// ... rest of the validation functions stay the same
+/* ------------------ VALIDATION ------------------ */
+export function validateGameName(name) {
+  if (!name || typeof name !== "string") return { valid: false, error: "Name is required" };
+  if (name.trim() === "") return { valid: false, error: "Name cannot be empty" };
+  if (name.length > 120) return { valid: false, error: "Name is too long (max 120 characters)" };
+  return { valid: true };
+}
+
+export function validateGamePin(pin) {
+  // Empty pin is allowed (no PIN)
+  if (pin === "" || pin === null || pin === undefined) return { valid: true };
+  if (typeof pin !== "string") return { valid: false, error: "PIN must be a string" };
+  if (pin.length < 4) return { valid: false, error: "PIN must be at least 4 characters" };
+  if (pin.length > 20) return { valid: false, error: "PIN is too long (max 20 characters)" };
+  return { valid: true };
+}
+
+export function validateLevelIds(levelIds) {
+  if (levelIds === undefined) return { valid: true };
+  if (!Array.isArray(levelIds)) return { valid: false, error: "levelIds must be an array" };
+  return { valid: true };
+}
+
+export function validateStoryline(storyline) {
+  if (storyline === undefined) return { valid: true };
+  if (!Array.isArray(storyline)) return { valid: false, error: "storyline must be an array" };
+  return { valid: true };
+}
+
+export function validateGameData(gameData) {
+  const nameCheck = validateGameName(gameData?.name);
+  if (!nameCheck.valid) return nameCheck;
+
+  // pin is optional but if present must be valid
+  const pinCheck = validateGamePin(gameData?.pin);
+  if (!pinCheck.valid) return pinCheck;
+
+  const levelsCheck = validateLevelIds(gameData?.levelIds);
+  if (!levelsCheck.valid) return levelsCheck;
+
+  const storyCheck = validateStoryline(gameData?.storyline);
+  if (!storyCheck.valid) return storyCheck;
+
+  return { valid: true };
+}
