@@ -29,7 +29,7 @@ export default function LevelEditPage() {
     handleSave,
     handleDelete,
     handleBack,
-    getStoredPin, // Now comes from the hook
+    getStoredPin, // comes from the hook (returns stored pin for THIS level)
   } = useLevelEditor(levelId, false, user?.email);
 
   const [editingPin, setEditingPin] = useState(false);
@@ -38,15 +38,17 @@ export default function LevelEditPage() {
 
   const pinRef = useRef(null);
 
-  // Sync pinValue when level loads
+  // ✅ Sync pinValue when NOT editing, without depending on an unstable function identity
   useEffect(() => {
-    const sessionPin = getStoredPin();
+    if (editingPin) return;
+
+    const sessionPin = getStoredPin(); // safe to call
     setPinValue(level.pin || sessionPin || "");
-  }, [level.pin, levelId, getStoredPin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingPin, level.pin, levelId]); // intentionally NOT depending on getStoredPin
 
   // True if any source tells us a PIN exists
-  const hasPin =
-    Boolean(level.pin) || Boolean(level.hasPin) || Boolean(getStoredPin());
+  const hasPin = Boolean(level.pin) || Boolean(level.hasPin) || Boolean(getStoredPin());
 
   if (loadingLevel) {
     return (
@@ -73,9 +75,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
           value={level.name || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, name: e.target.value }))
-          }
+          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -86,9 +86,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
           value={level.keywords || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, keywords: e.target.value }))
-          }
+          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
           placeholder="puzzle, challenge, easy"
           className="border p-2 w-full rounded"
         />
@@ -113,9 +111,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
           value={level.question || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, question: e.target.value }))
-          }
+          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
           placeholder="What question should players answer?"
           className="border p-2 w-full rounded"
           rows={2}
@@ -124,9 +120,8 @@ export default function LevelEditPage() {
 
       {/* PIN */}
       <div className="mb-4">
-        <label className="block text-sm font-medium mb-2">
-          PIN Protection
-        </label>
+        <label className="block text-sm font-medium mb-2">PIN Protection</label>
+
         {editingPin ? (
           <div className="flex gap-2">
             <input
@@ -137,8 +132,11 @@ export default function LevelEditPage() {
               placeholder="Enter PIN (min 4 characters)"
               className="border p-2 flex-1 rounded font-mono"
             />
+
             <button
+              type="button"
               onClick={() => {
+                // draft only (sessionStorage updates on Save/Publish in your hook)
                 setLevel((prev) => ({ ...prev, pin: pinValue }));
                 setEditingPin(false);
               }}
@@ -146,7 +144,9 @@ export default function LevelEditPage() {
             >
               <Check size={16} />
             </button>
+
             <button
+              type="button"
               onClick={() => {
                 setPinValue(level.pin || getStoredPin() || "");
                 setEditingPin(false);
@@ -167,15 +167,21 @@ export default function LevelEditPage() {
                 PIN set (not returned by server)
               </span>
             ) : (
-              <span className="text-sm text-gray-400 px-3 py-2">
-                No PIN set
-              </span>
+              <span className="text-sm text-gray-400 px-3 py-2">No PIN set</span>
             )}
 
             <button
+              type="button"
               onClick={() => {
+                // preload input from current display BEFORE enabling edit mode
+                const sessionPin = getStoredPin();
+                setPinValue(level.pin || sessionPin || "");
+
                 setEditingPin(true);
-                setTimeout(() => pinRef.current?.focus(), 0);
+
+                setTimeout(() => {
+                  if (pinRef.current) pinRef.current.focus();
+                }, 0);
               }}
               className="border px-3 py-2 rounded hover:bg-gray-100"
             >
@@ -184,7 +190,9 @@ export default function LevelEditPage() {
 
             {hasPin && (
               <button
+                type="button"
                 onClick={() => {
+                  // clear UI + draft only (sessionStorage cleared only on Save/Publish)
                   setLevel((prev) => ({ ...prev, pin: "" }));
                   setPinValue("");
                 }}
@@ -202,6 +210,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-2">Poses</label>
 
         <button
+          type="button"
           onClick={() => setShowPoseCapture(!showPoseCapture)}
           className="bg-purple-600 text-white px-3 py-2 rounded mb-2 flex items-center gap-2 hover:bg-purple-700"
         >
@@ -213,9 +222,7 @@ export default function LevelEditPage() {
           <div className="mb-3">
             <PoseCapture
               poses={level.poses || {}}
-              onPosesUpdate={(poses) =>
-                setLevel((prev) => ({ ...prev, poses }))
-              }
+              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
             />
           </div>
         )}
@@ -224,15 +231,14 @@ export default function LevelEditPage() {
           <div className="space-y-2">
             {Object.entries(level.poses).map(([key, val]) => (
               <div key={key} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-600 w-32 truncate">
-                  {key}:
-                </span>
+                <span className="text-sm text-gray-600 w-32 truncate">{key}:</span>
                 <input
                   value={typeof val === "string" ? val : JSON.stringify(val)}
                   disabled
                   className="border p-2 flex-1 bg-gray-50 rounded text-sm"
                 />
                 <button
+                  type="button"
                   onClick={() => removePose(key)}
                   className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
                 >
@@ -246,9 +252,7 @@ export default function LevelEditPage() {
 
       {/* OPTIONS & ANSWERS */}
       <div className="mb-6">
-        <label className="block text-sm font-medium mb-2">
-          Options & Answers
-        </label>
+        <label className="block text-sm font-medium mb-2">Options & Answers</label>
 
         {level.options && level.options.length > 0 ? (
           <div className="space-y-2 mb-3">
@@ -274,6 +278,7 @@ export default function LevelEditPage() {
                 </label>
 
                 <button
+                  type="button"
                   onClick={() => removeOption(i)}
                   className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
                 >
@@ -287,6 +292,7 @@ export default function LevelEditPage() {
         )}
 
         <button
+          type="button"
           onClick={addOption}
           className="bg-blue-600 text-white px-3 py-2 rounded flex items-center gap-2 hover:bg-blue-700"
         >
@@ -298,6 +304,7 @@ export default function LevelEditPage() {
       {/* ACTIONS */}
       <div className="flex gap-3 flex-wrap items-center">
         <button
+          type="button"
           disabled={savingLevel}
           onClick={() => handleSave(false)}
           className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -306,6 +313,7 @@ export default function LevelEditPage() {
         </button>
 
         <button
+          type="button"
           disabled={savingLevel}
           onClick={() => handleSave(true)}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -314,6 +322,7 @@ export default function LevelEditPage() {
         </button>
 
         <button
+          type="button"
           disabled={savingLevel}
           onClick={handleDelete}
           className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -322,6 +331,7 @@ export default function LevelEditPage() {
         </button>
 
         <button
+          type="button"
           onClick={handleBack}
           className="border px-4 py-2 rounded hover:bg-gray-100"
         >
