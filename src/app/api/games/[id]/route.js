@@ -8,11 +8,10 @@ export const runtime = "nodejs";
  * GET /games/[id]
  * Fetches a game by ID. Handles different modes:
  *  - mode=play: only published games are accessible
- *  - default: returns preview or full game data based on permissions
+ *  - default: returns preview ONLY when PIN is required (used for PIN flow)
  */
 export async function GET(req, context) {
   try {
-    // Extract game ID from URL
     const { id } = await context.params;
 
     if (!id) {
@@ -36,6 +35,7 @@ export async function GET(req, context) {
 
     const game = snapshot.val();
 
+    // ---------------- PLAY MODE ----------------
     if (mode === "play") {
       if (!game.isPublished) {
         return NextResponse.json(
@@ -44,7 +44,7 @@ export async function GET(req, context) {
         );
       }
 
-      // Return limited game data for playing
+      // Return limited game data for playing (no pin ever returned)
       return NextResponse.json({
         success: true,
         game: {
@@ -59,26 +59,19 @@ export async function GET(req, context) {
       });
     }
 
-    // Require session for full access
+    // ---------------- EDIT / DEFAULT MODE ----------------
     const { success, user, response } = await requireSession();
     if (!success) return response;
 
-    const userIsAdmin = isAdmin(user); // Check if user is admin
-    const isOwner = game.authorUid === user.uid; // Check ownership
+    const userIsAdmin = isAdmin(user);
+    const isOwner = game.authorUid === user.uid;
 
-    // Check if game has PIN
-    const pinRequired =
-      typeof game.pin === "string" &&
-      game.pin.length > 0;
-
-    // PIN from request headers
+    const pinRequired = typeof game.pin === "string" && game.pin.length > 0;
     const providedPin = req.headers.get("x-game-pin");
 
-    // Owner or Admin always allowed
+    // Owner/admin always allowed
     if (isOwner || userIsAdmin) {
-      // Exclude PIN from response
       const { pin, ...safeGame } = game;
-
       return NextResponse.json({
         success: true,
         preview: false,
@@ -90,17 +83,31 @@ export async function GET(req, context) {
       });
     }
 
-    // Preview mode (no pin sent)
+    // ✅ If no PIN exists, treat as public access (for any authenticated user)
+    if (!pinRequired) {
+      const { pin, ...safeGame } = game;
+      return NextResponse.json({
+        success: true,
+        preview: false,
+        hasPin: false,
+        game: {
+          id,
+          ...safeGame,
+        },
+      });
+    }
+
+    // PIN exists: if none provided -> preview (PIN flow)
     if (!providedPin) {
       return NextResponse.json({
         success: true,
         preview: true,
-        hasPin: pinRequired,
+        hasPin: true,
       });
     }
 
-    // PIN required but incorrect
-    if (pinRequired && providedPin !== game.pin) {
+    // PIN exists: incorrect
+    if (providedPin !== game.pin) {
       return NextResponse.json(
         {
           success: false,
@@ -112,19 +119,17 @@ export async function GET(req, context) {
       );
     }
 
-    // Access granted via PIN
+    // PIN correct -> return safe game
     const { pin, ...safeGame } = game;
-
     return NextResponse.json({
       success: true,
       preview: false,
-      hasPin: pinRequired,
+      hasPin: true,
       game: {
         id,
         ...safeGame,
       },
     });
-
   } catch (err) {
     console.error("GET /games/[id] error:", err);
     return NextResponse.json(
@@ -134,14 +139,15 @@ export async function GET(req, context) {
   }
 }
 
-
 /**
  * PATCH /games/[id]
  * Updates a game by ID.
- * Permissions: owner, admin, or PIN access
+ * Permissions:
+ *  - owner/admin always allowed
+ *  - if PIN exists -> must provide correct x-game-pin
+ *  - if NO PIN exists -> allowed for any authenticated session
  */
 export async function PATCH(req, context) {
-
   const { success, user, response } = await requireSession();
   if (!success) return response;
 
@@ -171,48 +177,29 @@ export async function PATCH(req, context) {
     const isOwner = existingGame.authorUid === user.uid;
 
     const pinRequired =
-      typeof existingGame.pin === "string" &&
-      existingGame.pin.length > 0;
+      typeof existingGame.pin === "string" && existingGame.pin.length > 0;
 
     const providedPin = req.headers.get("x-game-pin");
 
-    let hasPermission = false;
+    // ✅ Permission logic
+    if (!(isOwner || userIsAdmin)) {
+      // If PIN exists, enforce it
+      if (pinRequired) {
+        if (!providedPin) {
+          return NextResponse.json(
+            { success: false, code: "PIN_REQUIRED", message: "PIN required" },
+            { status: 403 }
+          );
+        }
 
-    if (isOwner || userIsAdmin) {
-      hasPermission = true;
-    }
-    else if (pinRequired) {
-
-      if (!providedPin) {
-        return NextResponse.json(
-          {
-            success: false,
-            code: "PIN_REQUIRED",
-            message: "PIN required",
-          },
-          { status: 403 }
-        );
+        if (providedPin !== existingGame.pin) {
+          return NextResponse.json(
+            { success: false, code: "INVALID_PIN", message: "Invalid PIN" },
+            { status: 403 }
+          );
+        }
       }
-
-      if (providedPin !== existingGame.pin) {
-        return NextResponse.json(
-          {
-            success: false,
-            code: "INVALID_PIN",
-            message: "Invalid PIN",
-          },
-          { status: 403 }
-        );
-      }
-
-      hasPermission = true;
-    }
-
-    if (!hasPermission) {
-      return NextResponse.json(
-        { success: false, message: "Forbidden" },
-        { status: 403 }
-      );
+      // If no PIN -> public write access for any authed user (do nothing)
     }
 
     const body = await req.json();
@@ -225,25 +212,30 @@ export async function PATCH(req, context) {
       updates[`GameList/${id}/name`] = body.name;
     }
 
-    if (body.description !== undefined)
+    if (body.description !== undefined) {
       updates[`Games/${id}/description`] = body.description;
+    }
 
     if (body.keywords !== undefined) {
       updates[`Games/${id}/keywords`] = body.keywords;
       updates[`GameList/${id}/keywords`] = body.keywords;
     }
 
-    if (body.levelIds !== undefined)
+    if (body.levelIds !== undefined) {
       updates[`Games/${id}/levelIds`] = body.levelIds;
+    }
 
-    if (body.storyline !== undefined)
+    if (body.storyline !== undefined) {
       updates[`Games/${id}/storyline`] = body.storyline;
+    }
 
-    if (body.settings !== undefined)
+    if (body.settings !== undefined) {
       updates[`Games/${id}/settings`] = body.settings;
+    }
 
-    if (body.pin !== undefined)
+    if (body.pin !== undefined) {
       updates[`Games/${id}/pin`] = body.pin;
+    }
 
     if (body.isPublished !== undefined) {
       updates[`Games/${id}/isPublished`] = body.isPublished;
@@ -266,7 +258,6 @@ export async function PATCH(req, context) {
         ...safeGame,
       },
     });
-
   } catch (err) {
     console.error("PATCH /games/[id] error:", err);
     return NextResponse.json(
@@ -276,14 +267,15 @@ export async function PATCH(req, context) {
   }
 }
 
-
 /**
  * DELETE /games/[id]
  * Deletes a game by ID.
- * Permissions: owner, admin, or PIN access
+ * Permissions:
+ *  - owner/admin always allowed
+ *  - if PIN exists -> must provide correct x-game-pin
+ *  - if NO PIN exists -> allowed for any authenticated session
  */
 export async function DELETE(req, context) {
-
   const { success, user, response } = await requireSession();
   if (!success) return response;
 
@@ -312,49 +304,27 @@ export async function DELETE(req, context) {
     const userIsAdmin = isAdmin(user);
     const isOwner = game.authorUid === user.uid;
 
-    const pinRequired =
-      typeof game.pin === "string" &&
-      game.pin.length > 0;
-
+    const pinRequired = typeof game.pin === "string" && game.pin.length > 0;
     const providedPin = req.headers.get("x-game-pin");
 
-    let hasPermission = false;
+    // ✅ Permission logic
+    if (!(isOwner || userIsAdmin)) {
+      if (pinRequired) {
+        if (!providedPin) {
+          return NextResponse.json(
+            { success: false, code: "PIN_REQUIRED", message: "PIN required" },
+            { status: 403 }
+          );
+        }
 
-    if (isOwner || userIsAdmin) {
-      hasPermission = true;
-    }
-    else if (pinRequired) {
-
-      if (!providedPin) {
-        return NextResponse.json(
-          {
-            success: false,
-            code: "PIN_REQUIRED",
-            message: "PIN required",
-          },
-          { status: 403 }
-        );
+        if (providedPin !== game.pin) {
+          return NextResponse.json(
+            { success: false, code: "INVALID_PIN", message: "Invalid PIN" },
+            { status: 403 }
+          );
+        }
       }
-
-      if (providedPin !== game.pin) {
-        return NextResponse.json(
-          {
-            success: false,
-            code: "INVALID_PIN",
-            message: "Invalid PIN",
-          },
-          { status: 403 }
-        );
-      }
-
-      hasPermission = true;
-    }
-
-    if (!hasPermission) {
-      return NextResponse.json(
-        { success: false, message: "Forbidden" },
-        { status: 403 }
-      );
+      // If no PIN -> public delete access for any authed user (do nothing)
     }
 
     await db.ref().update({
@@ -366,7 +336,6 @@ export async function DELETE(req, context) {
       success: true,
       message: "Game deleted successfully.",
     });
-
   } catch (err) {
     console.error("❌ DELETE /games/[id] error:", err);
     return NextResponse.json(
