@@ -47,7 +47,6 @@ export async function GET(req, context) {
         );
       }
 
-      // If no pin, return safe level
       if (!pinRequired) {
         const { pin, ...safeLevel } = level;
         return NextResponse.json({
@@ -58,7 +57,6 @@ export async function GET(req, context) {
         });
       }
 
-      // Pin exists: if none provided -> preview
       if (!providedPin) {
         return NextResponse.json({
           success: true,
@@ -67,7 +65,6 @@ export async function GET(req, context) {
         });
       }
 
-      // Pin exists: incorrect
       if (providedPin !== level.pin) {
         return NextResponse.json(
           {
@@ -80,7 +77,6 @@ export async function GET(req, context) {
         );
       }
 
-      // Pin correct -> return safe level
       const { pin, ...safeLevel } = level;
       return NextResponse.json({
         success: true,
@@ -97,7 +93,7 @@ export async function GET(req, context) {
     const userIsAdmin = isAdmin(user);
     const userIsOwner = level.authorUid === user.uid;
 
-    // ✅ owner/admin bypass pin completely (even if hasPin true)
+    // owner/admin bypass
     if (userIsOwner || userIsAdmin) {
       const { pin, ...safeLevel } = level;
       return NextResponse.json({
@@ -108,7 +104,6 @@ export async function GET(req, context) {
       });
     }
 
-    // if no pin -> any authed user can access
     if (!pinRequired) {
       const { pin, ...safeLevel } = level;
       return NextResponse.json({
@@ -119,7 +114,6 @@ export async function GET(req, context) {
       });
     }
 
-    // pin exists: no pin header -> preview
     if (!providedPin) {
       return NextResponse.json({
         success: true,
@@ -128,7 +122,6 @@ export async function GET(req, context) {
       });
     }
 
-    // pin exists: incorrect
     if (providedPin !== level.pin) {
       return NextResponse.json(
         {
@@ -141,7 +134,6 @@ export async function GET(req, context) {
       );
     }
 
-    // correct pin -> return safe level
     const { pin, ...safeLevel } = level;
     return NextResponse.json({
       success: true,
@@ -196,7 +188,8 @@ export async function PATCH(req, context) {
     const userIsAdmin = isAdmin(user);
     const userIsOwner = existing.authorUid === user.uid;
 
-    const pinRequired = typeof existing.pin === "string" && existing.pin.length > 0;
+    const pinRequired =
+      typeof existing.pin === "string" && existing.pin.length > 0;
     const providedPin = req.headers.get("x-level-pin");
 
     if (!(userIsOwner || userIsAdmin)) {
@@ -226,11 +219,13 @@ export async function PATCH(req, context) {
       }),
     };
 
+    // IMPORTANT: updates should be MERGED into existing node, not replace it.
     const updates = {
       ...normalizedBody,
       updatedAt: Date.now(),
     };
 
+    // Build LevelList mirror patch
     const levelListPatch = {};
     if (updates.name !== undefined) levelListPatch.name = updates.name;
     if (updates.author !== undefined) levelListPatch.author = updates.author;
@@ -238,12 +233,19 @@ export async function PATCH(req, context) {
     if (updates.keywords !== undefined) levelListPatch.keywords = updates.keywords;
     if (updates.isPublished !== undefined) levelListPatch.isPublished = updates.isPublished;
 
-    const multipath = {
-      [`level/${id}`]: updates,
-    };
+    // ✅ CRITICAL FIX:
+    // Multi-path update of `level/${id}` with an object REPLACES that node.
+    // Instead, update field-by-field so omitted fields (like pin) are preserved.
+    const multipath = {};
+
+    for (const [key, value] of Object.entries(updates)) {
+      multipath[`level/${id}/${key}`] = value;
+    }
 
     if (Object.keys(levelListPatch).length > 0) {
-      multipath[`LevelList/${id}`] = levelListPatch;
+      for (const [key, value] of Object.entries(levelListPatch)) {
+        multipath[`LevelList/${id}/${key}`] = value;
+      }
     }
 
     await db.ref().update(multipath);
@@ -299,7 +301,8 @@ export async function DELETE(req, context) {
     const userIsAdmin = isAdmin(user);
     const userIsOwner = existing.authorUid === user.uid;
 
-    const pinRequired = typeof existing.pin === "string" && existing.pin.length > 0;
+    const pinRequired =
+      typeof existing.pin === "string" && existing.pin.length > 0;
     const providedPin = req.headers.get("x-level-pin");
 
     if (!(userIsOwner || userIsAdmin)) {

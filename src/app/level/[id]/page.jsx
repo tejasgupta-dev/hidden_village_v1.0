@@ -18,8 +18,6 @@ export default function LevelEditPage() {
     loadingLevel,
     savingLevel,
     message,
-    addPose,
-    updatePose,
     removePose,
     addOption,
     updateOption,
@@ -28,7 +26,7 @@ export default function LevelEditPage() {
     handleSave,
     handleDelete,
     handleBack,
-    getStoredPin, // returns stored pin for THIS level
+    getStoredPin,
   } = useLevelEditor(levelId, false, user?.email);
 
   const [editingPin, setEditingPin] = useState(false);
@@ -37,9 +35,7 @@ export default function LevelEditPage() {
 
   const [showPoseCapture, setShowPoseCapture] = useState(false);
 
-  // ✅ KEY FIX (same as GameEditor):
-  // If user clicks "Remove PIN", we suppress sessionStorage PIN from being displayed
-  // (but sessionStorage still remains for auth until save succeeds).
+  // suppress sessionStorage PIN being re-displayed after local remove
   const [ignoreStoredPin, setIgnoreStoredPin] = useState(false);
 
   /* ------------------ PIN SYNC (don’t overwrite while typing) ------------------ */
@@ -47,40 +43,37 @@ export default function LevelEditPage() {
     if (!level) return;
     if (editingPin) return;
 
-    // If user removed pin locally, do NOT hydrate from sessionStorage anymore
     if (ignoreStoredPin) {
-      setPinValue(level.pin || "");
+      setPinValue((level.pin ?? "") || "");
       return;
     }
 
     const sessionPin = getStoredPin?.() || "";
-    setPinValue(level.pin || sessionPin || "");
+    const localPin = level.pin ?? "";
+    setPinValue(localPin || sessionPin || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [level?.pin, levelId, editingPin, ignoreStoredPin]);
 
-  // If level.pin becomes non-empty (e.g., after load or user sets it), stop ignoring storage
   useEffect(() => {
     if (!level) return;
-    if ((level.pin || "").trim()) {
-      setIgnoreStoredPin(false);
-    }
+    if (((level.pin ?? "") || "").trim()) setIgnoreStoredPin(false);
   }, [level]);
 
   const storedPin = !ignoreStoredPin ? (getStoredPin?.() || "") : "";
 
-  // True if any source tells us a PIN exists
   const hasPin =
-    Boolean((level?.pin || "").trim()) ||
+    Boolean(((level?.pin ?? "") || "").trim()) ||
     Boolean(level?.hasPin) ||
     Boolean((storedPin || "").trim());
 
   const handleRemovePin = () => {
-    // ✅ ONLY clear locally (draft). Do NOT touch sessionStorage here.
-    setLevel((prev) => ({ ...prev, pin: "" }));
+    setLevel((prev) => ({
+      ...prev,
+      pin: "",
+      pinDirty: true, // ✅ mark intent to remove
+    }));
     setPinValue("");
     setEditingPin(false);
-
-    // ✅ prevent UI from re-hydrating old session pin
     setIgnoreStoredPin(true);
   };
 
@@ -109,9 +102,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
           value={level.name || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, name: e.target.value }))
-          }
+          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -122,9 +113,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
           value={level.keywords || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, keywords: e.target.value }))
-          }
+          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
           placeholder="puzzle, challenge, easy"
           className="border p-2 w-full rounded"
         />
@@ -149,9 +138,7 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
           value={level.question || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, question: e.target.value }))
-          }
+          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
           placeholder="What question should players answer?"
           className="border p-2 w-full rounded"
           rows={2}
@@ -176,10 +163,12 @@ export default function LevelEditPage() {
             <button
               type="button"
               onClick={() => {
-                // draft only — handleSave updates sessionStorage AFTER success
-                setLevel((prev) => ({ ...prev, pin: pinValue }));
+                setLevel((prev) => ({
+                  ...prev,
+                  pin: pinValue,
+                  pinDirty: true, // ✅ mark intent to set/change
+                }));
 
-                // if they typed a pin (non-empty), stop ignoring storage
                 if ((pinValue || "").trim()) setIgnoreStoredPin(false);
                 else setIgnoreStoredPin(true);
 
@@ -195,7 +184,8 @@ export default function LevelEditPage() {
               type="button"
               onClick={() => {
                 const sessionPin2 = !ignoreStoredPin ? getStoredPin?.() || "" : "";
-                setPinValue(level.pin || sessionPin2 || "");
+                const localPin = level.pin ?? "";
+                setPinValue(localPin || sessionPin2 || "");
                 setEditingPin(false);
               }}
               className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500"
@@ -215,19 +205,16 @@ export default function LevelEditPage() {
                 PIN set (not returned by server)
               </span>
             ) : (
-              <span className="text-sm text-gray-400 px-3 py-2">
-                No PIN set
-              </span>
+              <span className="text-sm text-gray-400 px-3 py-2">No PIN set</span>
             )}
 
             <button
               type="button"
               onClick={() => {
-                // allow using stored pin again as a starting point
                 setIgnoreStoredPin(false);
-
                 const sessionPin2 = getStoredPin?.() || "";
-                setPinValue(level.pin || sessionPin2 || "");
+                const localPin = level.pin ?? "";
+                setPinValue(localPin || sessionPin2 || "");
                 setEditingPin(true);
                 setTimeout(() => pinRef.current?.focus(), 0);
               }}

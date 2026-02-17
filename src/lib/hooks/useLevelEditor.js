@@ -59,7 +59,8 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
           options: [],
           answers: [],
           isPublished: false,
-          pin: "", // draft pin only (for create)
+          pin: "",
+          pinDirty: false,
         });
         return;
       }
@@ -76,8 +77,14 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
         try {
           const res = await levelEditor.load(levelId, { pin: storedPin });
           if (res?.success) {
-            // ✅ keep UI pin stable from storage (server never returns pin)
-            setLevel({ ...res.level, id: levelId, pin: storedPin });
+            setLevel({
+              ...res.level,
+              id: levelId,
+              // keep visible pin from storage only
+              pin: storedPin,
+              // not dirty unless user edits in UI
+              pinDirty: false,
+            });
             return;
           }
         } catch (err) {
@@ -97,7 +104,6 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
         response = await levelEditor.load(levelId);
       } catch (err) {
         status = getErrStatus(err);
-        // If your apiClient throws, we still need a shape to continue
         if (status === 403) {
           response = err?.response?.data || { preview: true, hasPin: true };
         } else {
@@ -105,8 +111,7 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
         }
       }
 
-      // ✅ KEY FIX:
-      // Only prompt when API says PREVIEW (meaning: you do NOT have access yet)
+      // Only prompt when API says PREVIEW
       if (response?.preview === true || status === 403) {
         let attempts = 0;
 
@@ -120,23 +125,22 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
           try {
             const retry = await levelEditor.load(levelId, { pin: enteredPin });
             if (retry?.success) {
-              // Store pin for future auth
               setStoredPin(levelId, enteredPin);
-
-              // ✅ DO NOT inject enteredPin into level state
-              // (it makes the UI show random pin and is a security footgun)
               const stillStored = getStoredPin(levelId);
-              setLevel({ ...retry.level, id: levelId, pin: stillStored || "" });
 
+              setLevel({
+                ...retry.level,
+                id: levelId,
+                pin: stillStored || enteredPin,
+                pinDirty: false,
+              });
               return;
             }
+
             alert("Invalid PIN");
           } catch (err) {
-            if (getErrStatus(err) === 403) {
-              alert("Invalid PIN");
-            } else {
-              throw err;
-            }
+            if (getErrStatus(err) === 403) alert("Invalid PIN");
+            else throw err;
           }
 
           attempts += 1;
@@ -146,7 +150,7 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
         return;
       }
 
-      // 3) Must be accessible (owner/admin/unlocked)
+      // 3) Must be accessible
       if (!response?.success) {
         alert(response?.message || "Failed to load level");
         router.replace("/level/menu");
@@ -154,7 +158,16 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
       }
 
       const stillStored = getStoredPin(levelId);
-      setLevel({ ...response.level, id: levelId, pin: stillStored || "" });
+
+      // ✅ IMPORTANT:
+      // Do NOT default pin to "" here. If no stored pin, keep pin undefined
+      // so it won't accidentally get sent.
+      setLevel({
+        ...response.level,
+        id: levelId,
+        pin: stillStored || undefined,
+        pinDirty: false,
+      });
     } catch (err) {
       console.error("Error loading level:", err);
       alert("Error loading level");
@@ -184,13 +197,14 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
         let response;
 
         if (isNew) {
-          response = await levelEditor.create({ ...level, isPublished: publish });
+          // for NEW levels, sending pin is fine
+          const { id, pinDirty, ...draft } = level;
+          response = await levelEditor.create({ ...draft, isPublished: publish });
 
           if (response?.success && response?.id) {
             const newId = response.id;
 
-            // mirror draft pin to sessionStorage after success
-            const desiredPin = (level.pin || "").trim();
+            const desiredPin = (draft.pin || "").trim();
             if (desiredPin) setStoredPin(newId, desiredPin);
             else clearStoredPin(newId);
 
@@ -204,21 +218,36 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
           const authPin = getStoredPin(levelId);
           const opts = authPin ? { pin: authPin } : undefined;
 
-          response = await levelEditor.save(
-            levelId,
-            { ...level, isPublished: publish },
-            opts
-          );
+          // ✅ CRITICAL FIX:
+          // Only send `pin` if the user actually changed it (pinDirty === true).
+          const { id, pinDirty, ...draft } = level;
+          const payload = { ...draft, isPublished: publish };
 
+          if (!pinDirty) {
+            delete payload.pin; // do not overwrite server pin
+          } else {
+            // user changed it (set or removed)
+            payload.pin = (draft.pin ?? "").toString();
+          }
+
+          response = await levelEditor.save(levelId, payload, opts);
           if (!response?.success) throw new Error("Save failed");
 
-          // After success, mirror draft pin to storage
-          const desiredPin = (level.pin || "").trim();
-          if (desiredPin) setStoredPin(levelId, desiredPin);
-          else clearStoredPin(levelId);
+          // After success, mirror draft pin to storage ONLY if user changed it
+          if (pinDirty) {
+            const desiredPin = (payload.pin || "").trim();
+            if (desiredPin) setStoredPin(levelId, desiredPin);
+            else clearStoredPin(levelId);
+          }
 
           const stillStored = getStoredPin(levelId);
-          setLevel({ ...response.level, id: levelId, pin: stillStored || "" });
+
+          setLevel({
+            ...response.level,
+            id: levelId,
+            pin: stillStored || undefined,
+            pinDirty: false,
+          });
 
           alert(publish ? "Level published!" : "Draft saved!");
           return;
