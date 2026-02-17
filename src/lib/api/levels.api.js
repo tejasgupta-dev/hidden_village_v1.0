@@ -18,6 +18,10 @@ export const levelsApi = {
     });
   },
 
+  listPublished(options = {}) {
+    return this.list({ publishedOnly: "true" }, { credentials: options.credentials || "include" });
+  },
+
   /**
    * Get a single level
    * @param {string} levelId - The level ID

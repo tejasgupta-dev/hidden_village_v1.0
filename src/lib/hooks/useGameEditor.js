@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { gameEditor } from "../domain/games/gameEditor";
+import levelMenu from "../domain/levels/levelMenu";
 
 export function useGameEditor(id, isNew = false, userEmail) {
   const router = useRouter();
@@ -11,6 +12,7 @@ export function useGameEditor(id, isNew = false, userEmail) {
   const [game, setGame] = useState(null);
   const [loadingGame, setLoadingGame] = useState(true);
   const [savingGame, setSavingGame] = useState(false);
+
   const [allAvailableLevels, setAllAvailableLevels] = useState({});
 
   // ✅ prevent double prompts in dev StrictMode
@@ -36,6 +38,37 @@ export function useGameEditor(id, isNew = false, userEmail) {
 
   const getErrStatus = (err) =>
     err?.status || err?.response?.status || err?.cause?.status;
+
+  /* ------------------ LOAD PUBLISHED LEVELS ------------------ */
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPublishedLevels() {
+      try {
+        const res = (await levelMenu.listPublished?.()) ?? (await levelMenu.list());
+
+        if (cancelled) return;
+        if (!res?.success) return;
+
+        const list = res.levels || res.publishedLevels || [];
+        const onlyPublished =
+          (res.levels || []).length > 0 && (res.publishedLevels || []).length === 0
+            ? list.filter((l) => l.isPublished === true)
+            : list;
+
+        const map = {};
+        for (const lvl of onlyPublished) map[lvl.id] = lvl;
+        setAllAvailableLevels(map);
+      } catch (e) {
+        if (!cancelled) console.error("Failed to load published levels", e);
+      }
+    }
+
+    loadPublishedLevels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /* ------------------ LOAD GAME ------------------ */
   const loadGame = useCallback(async () => {
@@ -70,13 +103,11 @@ export function useGameEditor(id, isNew = false, userEmail) {
       if (storedPin) {
         try {
           const res = await gameEditor.load(id, { pin: storedPin });
-          if (res?.success) {
-            // ✅ seed UI pin from stored pin (server may not return it)
-            setGame({ ...res.game, pin: storedPin });
+          if (res?.success && res?.preview !== true) {
+            setGame(res.game); // ✅ do NOT inject pin into game state
             return;
           }
         } catch (err) {
-          // stored pin bad => clear and fall through to prompt flow
           if (getErrStatus(err) === 403) {
             clearStoredPin(id);
           } else {
@@ -85,20 +116,25 @@ export function useGameEditor(id, isNew = false, userEmail) {
         }
       }
 
-      // 2) Try loading without pin (may return preview OR may throw 403)
+      // 2) Try loading without pin
       let response;
       try {
         response = await gameEditor.load(id);
       } catch (err) {
-        if (getErrStatus(err) === 403) {
+        // If your apiClient throws on non-2xx, this is where it lands.
+        // Only treat as PIN if code is PIN_REQUIRED.
+        const status = getErrStatus(err);
+        const body = err?.responseBody || err?.data || err?.response?.data;
+
+        if (status === 403 && body?.code === "PIN_REQUIRED") {
           response = { preview: true, hasPin: true };
         } else {
           throw err;
         }
       }
 
-      // 3) If protected, prompt user to type pin (allow retries)
-      if (response?.preview || response?.hasPin) {
+      // 3) If protected (explicit preview), prompt
+      if (response?.preview === true) {
         let attempts = 0;
 
         while (attempts < 3) {
@@ -110,18 +146,15 @@ export function useGameEditor(id, isNew = false, userEmail) {
 
           try {
             const retry = await gameEditor.load(id, { pin: enteredPin });
-            if (retry?.success) {
+            if (retry?.success && retry?.preview !== true) {
               setStoredPin(id, enteredPin);
-              setGame({ ...retry.game, pin: enteredPin });
+              setGame(retry.game); // ✅ do NOT inject pin into game state
               return;
             }
             alert("Invalid PIN");
           } catch (err) {
-            if (getErrStatus(err) === 403) {
-              alert("Invalid PIN");
-            } else {
-              throw err;
-            }
+            if (getErrStatus(err) === 403) alert("Invalid PIN");
+            else throw err;
           }
 
           attempts += 1;
@@ -138,8 +171,7 @@ export function useGameEditor(id, isNew = false, userEmail) {
         return;
       }
 
-      const stillStored = getStoredPin(id);
-      setGame({ ...response.game, pin: stillStored || "" });
+      setGame(response.game); // ✅ do NOT inject stored pin into game state
     } catch (err) {
       console.error("Error loading game", err);
       alert("Error loading game");
@@ -165,7 +197,6 @@ export function useGameEditor(id, isNew = false, userEmail) {
           if (response?.success && response?.game?.id) {
             const newId = response.game.id;
 
-            // ✅ after success, mirror "draft pin" to sessionStorage
             const desiredPin = (game.pin || "").trim();
             if (desiredPin) setStoredPin(newId, desiredPin);
             else clearStoredPin(newId);
@@ -174,28 +205,20 @@ export function useGameEditor(id, isNew = false, userEmail) {
             return;
           }
         } else {
-          // ✅ IMPORTANT:
-          // Always authenticate using the currently stored pin (old pin),
-          // even if user is removing/changing it in the draft.
+          // Authenticate using stored pin (old pin)
           const authPin = getStoredPin(id);
           const opts = authPin ? { pin: authPin } : undefined;
 
-          response = await gameEditor.save(
-            game.id,
-            { ...game, isPublished: publish },
-            opts
-          );
+          response = await gameEditor.save(game.id, { ...game, isPublished: publish }, opts);
 
           if (!response?.success) throw new Error("Save failed");
 
-          // ✅ after success, mirror "draft pin" to sessionStorage
+          // Mirror draft pin to sessionStorage after success
           const desiredPin = (game.pin || "").trim();
           if (desiredPin) setStoredPin(id, desiredPin);
           else clearStoredPin(id);
 
-          // keep UI pin stable (server may not return pin)
-          const stillStored = getStoredPin(id);
-          setGame({ ...response.game, pin: stillStored || "" });
+          setGame(response.game);
           return;
         }
 
@@ -269,7 +292,6 @@ export function useGameEditor(id, isNew = false, userEmail) {
     getLevelData: (levelId) =>
       allAvailableLevels[levelId] || { id: levelId, name: "", description: "" },
 
-    // expose for UI
     getStoredPin: () => getStoredPin(id),
   };
 }

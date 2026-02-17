@@ -90,17 +90,12 @@ function LevelMenu({ mode }) {
 
   // Click level → check if protected, then navigate
   const handleSelectLevel = async (levelId) => {
-    if (!levelId) {
-      console.error("handleSelectLevel: No level ID provided");
-      return;
-    }
+  try {
+    const res = await fetch(`/api/levels/${levelId}`, { credentials: "include" });
+    const data = await res.json();
 
-    console.log("Selecting level with ID:", levelId);
-
-    // Check if level is protected from the list data
-    const level = levels.find(l => l.id === levelId);
-    
-    if (level && isProtected(level)) {
+    // If API indicates preview/locked, show modal
+    if (res.status === 403 || data?.preview === true) {
       setSelectedLevelId(levelId);
       setShowPinModal(true);
       setPin("");
@@ -108,9 +103,19 @@ function LevelMenu({ mode }) {
       return;
     }
 
-    // No pin required, navigate directly
+    if (!data?.success) {
+      alert(data?.message || "Failed to load level.");
+      return;
+    }
+
+    // Otherwise you have access (owner/admin/unlocked)
     navigateToLevel(levelId);
-  };
+  } catch (err) {
+    console.error(err);
+    alert("Error loading level.");
+  }
+};
+
 
   // Handle PIN submission
   const handlePinSubmit = async (e) => {

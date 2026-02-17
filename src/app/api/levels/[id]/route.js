@@ -5,54 +5,121 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 export const runtime = "nodejs";
 
 /**
- * GET – Fetch Level
- * - If NO PIN exists → return full level data (no header needed)
- * - If PIN exists and no PIN header → return preview only
- * - If PIN exists and incorrect → deny access
- * - If PIN exists and correct → return full level data
- * - PIN is NEVER returned to client
+ * GET /levels/[id]
+ * Modes:
+ *  - mode=play: public access to published levels; PIN enforced if level has a pin
+ *  - default (edit): requires session; owner/admin bypasses PIN; others use preview flow
  */
 export async function GET(req, context) {
   try {
     const params = await context.params;
-    const id = params.id || params.levelId;
+    const id = params?.id || params?.levelId;
 
-    if (!id || id === "") {
+    if (!id) {
       return NextResponse.json(
-        { success: false, message: "Level ID required" },
+        { success: false, message: "Level ID required." },
         { status: 400 }
       );
     }
 
-    const levelSnap = await db.ref(`level/${id}`).get();
+    const url = new URL(req.url);
+    const mode = url.searchParams.get("mode");
 
-    if (!levelSnap.exists()) {
+    const snap = await db.ref(`level/${id}`).get();
+    if (!snap.exists()) {
       return NextResponse.json(
-        { success: false, message: "Level not found" },
+        { success: false, message: "Level not found." },
         { status: 404 }
       );
     }
 
-    const level = levelSnap.val();
+    const level = snap.val();
 
-    const hasPin = typeof level.pin === "string" && level.pin.length > 0;
+    const pinRequired = typeof level.pin === "string" && level.pin.length > 0;
     const providedPin = req.headers.get("x-level-pin");
 
-    // ✅ If no PIN exists, return full level without any header
-    if (!hasPin) {
+    /* ---------------- PLAY MODE (public) ---------------- */
+    if (mode === "play") {
+      if (!level.isPublished) {
+        return NextResponse.json(
+          { success: false, message: "Level is not published." },
+          { status: 403 }
+        );
+      }
+
+      // If no pin, return safe level
+      if (!pinRequired) {
+        const { pin, ...safeLevel } = level;
+        return NextResponse.json({
+          success: true,
+          preview: false,
+          hasPin: false,
+          level: { id, ...safeLevel },
+        });
+      }
+
+      // Pin exists: if none provided -> preview
+      if (!providedPin) {
+        return NextResponse.json({
+          success: true,
+          preview: true,
+          hasPin: true,
+        });
+      }
+
+      // Pin exists: incorrect
+      if (providedPin !== level.pin) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "INVALID_PIN",
+            message: "Invalid PIN",
+            hasPin: true,
+          },
+          { status: 403 }
+        );
+      }
+
+      // Pin correct -> return safe level
+      const { pin, ...safeLevel } = level;
+      return NextResponse.json({
+        success: true,
+        preview: false,
+        hasPin: true,
+        level: { id, ...safeLevel },
+      });
+    }
+
+    /* ---------------- EDIT / DEFAULT MODE (authed) ---------------- */
+    const { success, user, response } = await requireSession();
+    if (!success) return response;
+
+    const userIsAdmin = isAdmin(user);
+    const userIsOwner = level.authorUid === user.uid;
+
+    // ✅ owner/admin bypass pin completely (even if hasPin true)
+    if (userIsOwner || userIsAdmin) {
+      const { pin, ...safeLevel } = level;
+      return NextResponse.json({
+        success: true,
+        preview: false,
+        hasPin: pinRequired,
+        level: { id, ...safeLevel },
+      });
+    }
+
+    // if no pin -> any authed user can access
+    if (!pinRequired) {
       const { pin, ...safeLevel } = level;
       return NextResponse.json({
         success: true,
         preview: false,
         hasPin: false,
-        level: {
-          id,
-          ...safeLevel,
-        },
+        level: { id, ...safeLevel },
       });
     }
 
-    // Preview mode when PIN exists but wasn't provided
+    // pin exists: no pin header -> preview
     if (!providedPin) {
       return NextResponse.json({
         success: true,
@@ -61,114 +128,97 @@ export async function GET(req, context) {
       });
     }
 
-    // Incorrect PIN
+    // pin exists: incorrect
     if (providedPin !== level.pin) {
       return NextResponse.json(
-        { success: false, message: "Incorrect PIN", hasPin: true },
+        {
+          success: false,
+          code: "INVALID_PIN",
+          message: "Invalid PIN",
+          hasPin: true,
+        },
         { status: 403 }
       );
     }
 
-    // Access granted
+    // correct pin -> return safe level
     const { pin, ...safeLevel } = level;
-
     return NextResponse.json({
       success: true,
       preview: false,
       hasPin: true,
-      level: {
-        id,
-        ...safeLevel,
-      },
+      level: { id, ...safeLevel },
     });
   } catch (err) {
-    console.error("GET level error:", err);
+    console.error("GET /levels/[id] error:", err);
     return NextResponse.json(
-      { success: false, message: err.message },
+      { success: false, message: "Failed to fetch level." },
       { status: 500 }
     );
   }
 }
 
 /**
- * PATCH – Update Level
- * Rules:
- * - If NO PIN exists → ✅ any logged-in user can update (public edit)
- * - If PIN exists → owner/admin OR valid PIN required
+ * PATCH /levels/[id]
+ * Permissions:
+ *  - owner/admin always allowed
+ *  - if PIN exists -> must provide correct x-level-pin for non-owner/admin
+ *  - if NO PIN exists -> allowed for any authenticated user
  *
- * Also mirrors menu fields to LevelList/{id} so the UI list stays correct.
+ * Mirrors menu fields to LevelList/{id}
  */
 export async function PATCH(req, context) {
-  const { success, user, response } = await requireSession(req);
+  const { success, user, response } = await requireSession();
   if (!success) return response;
 
   try {
     const params = await context.params;
-    const id = params.id || params.levelId;
+    const id = params?.id || params?.levelId;
 
-    if (!id || id === "") {
+    if (!id) {
       return NextResponse.json(
-        { success: false, message: "Level ID required" },
+        { success: false, message: "Level ID required." },
         { status: 400 }
       );
     }
 
     const ref = db.ref(`level/${id}`);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists()) {
+    const snap = await ref.get();
+    if (!snap.exists()) {
       return NextResponse.json(
-        { success: false, message: "Level not found" },
+        { success: false, message: "Level not found." },
         { status: 404 }
       );
     }
 
-    const existingLevel = snapshot.val();
-    const pinRequired =
-      typeof existingLevel.pin === "string" && existingLevel.pin.length > 0;
+    const existing = snap.val();
 
-    // ✅ Permission rules
-    let hasPermission = false;
+    const userIsAdmin = isAdmin(user);
+    const userIsOwner = existing.authorUid === user.uid;
 
-    // Public edit if no pin exists
-    if (!pinRequired) {
-      hasPermission = true;
-    }
-    // Owner/admin always allowed
-    else if (existingLevel.authorUid === user.uid || isAdmin(user)) {
-      hasPermission = true;
-    }
-    // Otherwise require valid PIN
-    else {
-      const providedPin = req.headers.get("x-level-pin");
+    const pinRequired = typeof existing.pin === "string" && existing.pin.length > 0;
+    const providedPin = req.headers.get("x-level-pin");
 
-      if (!providedPin) {
-        return NextResponse.json(
-          { success: false, code: "PIN_REQUIRED", message: "PIN required" },
-          { status: 403 }
-        );
+    if (!(userIsOwner || userIsAdmin)) {
+      if (pinRequired) {
+        if (!providedPin) {
+          return NextResponse.json(
+            { success: false, code: "PIN_REQUIRED", message: "PIN required" },
+            { status: 403 }
+          );
+        }
+        if (providedPin !== existing.pin) {
+          return NextResponse.json(
+            { success: false, code: "INVALID_PIN", message: "Invalid PIN" },
+            { status: 403 }
+          );
+        }
       }
-
-      if (providedPin !== existingLevel.pin) {
-        return NextResponse.json(
-          { success: false, code: "INVALID_PIN", message: "Invalid PIN" },
-          { status: 403 }
-        );
-      }
-
-      hasPermission = true;
-    }
-
-    if (!hasPermission) {
-      return NextResponse.json(
-        { success: false, message: "Forbidden" },
-        { status: 403 }
-      );
     }
 
     const body = await req.json();
 
-    // Normalize isPublished if it might come as "true"/"false"
+    // normalize isPublished boolean if it might arrive as string
     const normalizedBody = {
       ...body,
       ...(Object.prototype.hasOwnProperty.call(body, "isPublished") && {
@@ -181,7 +231,6 @@ export async function PATCH(req, context) {
       updatedAt: Date.now(),
     };
 
-    // Mirror only menu fields into LevelList
     const levelListPatch = {};
     if (updates.name !== undefined) levelListPatch.name = updates.name;
     if (updates.author !== undefined) levelListPatch.author = updates.author;
@@ -199,100 +248,75 @@ export async function PATCH(req, context) {
 
     await db.ref().update(multipath);
 
-    const updatedSnapshot = await db.ref(`level/${id}`).get();
-    const updatedLevel = updatedSnapshot.val();
+    const updatedSnap = await db.ref(`level/${id}`).get();
+    const updated = updatedSnap.val();
 
-    const { pin, ...safeLevel } = updatedLevel;
+    const { pin, ...safeLevel } = updated;
 
     return NextResponse.json({
       success: true,
-      level: {
-        id,
-        ...safeLevel,
-      },
+      level: { id, ...safeLevel },
     });
   } catch (err) {
-    console.error("PATCH level error:", err);
+    console.error("PATCH /levels/[id] error:", err);
     return NextResponse.json(
-      { success: false, message: err.message },
+      { success: false, message: "Failed to update level." },
       { status: 500 }
     );
   }
 }
 
 /**
- * DELETE – Delete Level
- * Rules:
- * - If NO PIN exists → ✅ any logged-in user can delete (public delete)
- * - If PIN exists → owner/admin OR valid PIN required
- *
- * Deletes from both `level/{id}` and `LevelList/{id}`.
+ * DELETE /levels/[id]
+ * Same permission rules as PATCH.
  */
 export async function DELETE(req, context) {
-  const { success, user, response } = await requireSession(req);
+  const { success, user, response } = await requireSession();
   if (!success) return response;
 
   try {
     const params = await context.params;
-    const id = params.id || params.levelId;
+    const id = params?.id || params?.levelId;
 
-    if (!id || id === "") {
+    if (!id) {
       return NextResponse.json(
-        { success: false, message: "Level ID required" },
+        { success: false, message: "Level ID required." },
         { status: 400 }
       );
     }
 
     const ref = db.ref(`level/${id}`);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists()) {
+    const snap = await ref.get();
+    if (!snap.exists()) {
       return NextResponse.json(
-        { success: false, message: "Level not found" },
+        { success: false, message: "Level not found." },
         { status: 404 }
       );
     }
 
-    const level = snapshot.val();
-    const pinRequired = typeof level.pin === "string" && level.pin.length > 0;
+    const existing = snap.val();
 
-    // ✅ Permission rules
-    let hasPermission = false;
+    const userIsAdmin = isAdmin(user);
+    const userIsOwner = existing.authorUid === user.uid;
 
-    // Public delete if no pin exists
-    if (!pinRequired) {
-      hasPermission = true;
-    }
-    // Owner/admin always allowed
-    else if (level.authorUid === user.uid || isAdmin(user)) {
-      hasPermission = true;
-    }
-    // Otherwise require valid PIN
-    else {
-      const providedPin = req.headers.get("x-level-pin");
+    const pinRequired = typeof existing.pin === "string" && existing.pin.length > 0;
+    const providedPin = req.headers.get("x-level-pin");
 
-      if (!providedPin) {
-        return NextResponse.json(
-          { success: false, code: "PIN_REQUIRED", message: "PIN required" },
-          { status: 403 }
-        );
+    if (!(userIsOwner || userIsAdmin)) {
+      if (pinRequired) {
+        if (!providedPin) {
+          return NextResponse.json(
+            { success: false, code: "PIN_REQUIRED", message: "PIN required" },
+            { status: 403 }
+          );
+        }
+        if (providedPin !== existing.pin) {
+          return NextResponse.json(
+            { success: false, code: "INVALID_PIN", message: "Invalid PIN" },
+            { status: 403 }
+          );
+        }
       }
-
-      if (providedPin !== level.pin) {
-        return NextResponse.json(
-          { success: false, code: "INVALID_PIN", message: "Invalid PIN" },
-          { status: 403 }
-        );
-      }
-
-      hasPermission = true;
-    }
-
-    if (!hasPermission) {
-      return NextResponse.json(
-        { success: false, message: "Forbidden" },
-        { status: 403 }
-      );
     }
 
     await db.ref().update({
@@ -300,14 +324,11 @@ export async function DELETE(req, context) {
       [`LevelList/${id}`]: null,
     });
 
-    return NextResponse.json({
-      success: true,
-      message: "Level deleted",
-    });
+    return NextResponse.json({ success: true, message: "Level deleted" });
   } catch (err) {
-    console.error("DELETE level error:", err);
+    console.error("DELETE /levels/[id] error:", err);
     return NextResponse.json(
-      { success: false, message: err.message },
+      { success: false, message: "Failed to delete level." },
       { status: 500 }
     );
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { Check, X, Plus, Trash2, Camera } from "lucide-react";
 import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
@@ -15,8 +15,6 @@ export default function NewLevelPage() {
     loadingLevel,
     savingLevel,
     message,
-    addPose,
-    updatePose,
     removePose,
     addOption,
     updateOption,
@@ -24,7 +22,10 @@ export default function NewLevelPage() {
     toggleAnswer,
     handleSave,
     handleBack,
-  } = useLevelEditor(null, true, user?.email); // levelId = null, isNew = true
+  } = useLevelEditor(null, true, user?.email);
+
+  // Always work with a safe object (level can be null briefly)
+  const safeLevel = useMemo(() => level ?? {}, [level]);
 
   const [editingPin, setEditingPin] = useState(false);
   const [pinValue, setPinValue] = useState("");
@@ -32,14 +33,14 @@ export default function NewLevelPage() {
 
   const pinRef = useRef(null);
 
-  // Sync pinValue with level.pin
+  // Keep pinValue in sync with the current draft level pin (but don't fight typing)
   useEffect(() => {
-    if (level.pin) {
-      setPinValue(level.pin);
+    if (!editingPin) {
+      setPinValue(safeLevel.pin || "");
     }
-  }, [level.pin]);
+  }, [safeLevel.pin, editingPin]);
 
-  if (loadingLevel) {
+  if (loadingLevel || !level) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-lg">Loading...</div>
@@ -61,10 +62,8 @@ export default function NewLevelPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
-          value={level.name || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, name: e.target.value }))
-          }
+          value={safeLevel.name || ""}
+          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -74,7 +73,7 @@ export default function NewLevelPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
-          value={level.keywords || ""}
+          value={safeLevel.keywords || ""}
           onChange={(e) =>
             setLevel((prev) => ({ ...prev, keywords: e.target.value }))
           }
@@ -87,7 +86,7 @@ export default function NewLevelPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Description</label>
         <textarea
-          value={level.description || ""}
+          value={safeLevel.description || ""}
           onChange={(e) =>
             setLevel((prev) => ({ ...prev, description: e.target.value }))
           }
@@ -101,7 +100,7 @@ export default function NewLevelPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
-          value={level.question || ""}
+          value={safeLevel.question || ""}
           onChange={(e) =>
             setLevel((prev) => ({ ...prev, question: e.target.value }))
           }
@@ -116,6 +115,7 @@ export default function NewLevelPage() {
         <label className="block text-sm font-medium mb-2">
           PIN Protection (Optional)
         </label>
+
         {editingPin ? (
           <div className="flex gap-2">
             <input
@@ -126,40 +126,55 @@ export default function NewLevelPage() {
               placeholder="Enter PIN (min 4 characters)"
               className="border p-2 flex-1 rounded"
             />
+
+            {/* Apply draft pin */}
             <button
+              type="button"
               onClick={() => {
                 setLevel((prev) => ({ ...prev, pin: pinValue }));
                 setEditingPin(false);
               }}
               className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+              title="Apply (draft)"
             >
               <Check size={16} />
             </button>
+
+            {/* Cancel: revert to saved draft pin */}
             <button
+              type="button"
               onClick={() => {
-                setPinValue("");
+                setPinValue(safeLevel.pin || "");
                 setEditingPin(false);
               }}
               className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500"
+              title="Cancel"
             >
               <X size={16} />
             </button>
           </div>
         ) : (
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             <button
+              type="button"
               onClick={() => {
-                setPinValue(level.pin || "");
+                setPinValue(safeLevel.pin || "");
                 setEditingPin(true);
                 setTimeout(() => pinRef.current?.focus(), 0);
               }}
               className="border px-3 py-2 rounded hover:bg-gray-100"
             >
-              {level.pin ? "🔒 Change PIN" : "🔓 Set PIN"}
+              {safeLevel.pin ? "🔒 Change PIN" : "🔓 Set PIN"}
             </button>
-            {level.pin && (
+
+            {safeLevel.pin && (
               <button
-                onClick={() => setLevel((prev) => ({ ...prev, pin: "" }))}
+                type="button"
+                onClick={() => {
+                  setLevel((prev) => ({ ...prev, pin: "" }));
+                  setPinValue("");
+                  setEditingPin(false);
+                }}
                 className="text-red-600 hover:text-red-800 px-3 py-2"
               >
                 Remove PIN
@@ -174,7 +189,8 @@ export default function NewLevelPage() {
         <label className="block text-sm font-medium mb-2">Poses</label>
 
         <button
-          onClick={() => setShowPoseCapture(!showPoseCapture)}
+          type="button"
+          onClick={() => setShowPoseCapture((s) => !s)}
           className="bg-purple-600 text-white px-3 py-2 rounded mb-2 flex items-center gap-2 hover:bg-purple-700"
         >
           <Camera size={16} />
@@ -184,27 +200,24 @@ export default function NewLevelPage() {
         {showPoseCapture && (
           <div className="mb-3">
             <PoseCapture
-              poses={level.poses || {}}
-              onPosesUpdate={(poses) =>
-                setLevel((prev) => ({ ...prev, poses }))
-              }
+              poses={safeLevel.poses || {}}
+              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
             />
           </div>
         )}
 
-        {level.poses && Object.keys(level.poses).length > 0 && (
+        {safeLevel.poses && Object.keys(safeLevel.poses).length > 0 && (
           <div className="space-y-2">
-            {Object.entries(level.poses).map(([key, val]) => (
+            {Object.entries(safeLevel.poses).map(([key, val]) => (
               <div key={key} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-600 w-32 truncate">
-                  {key}:
-                </span>
+                <span className="text-sm text-gray-600 w-32 truncate">{key}:</span>
                 <input
                   value={typeof val === "string" ? val : JSON.stringify(val)}
                   disabled
                   className="border p-2 flex-1 bg-gray-50 rounded text-sm"
                 />
                 <button
+                  type="button"
                   onClick={() => removePose(key)}
                   className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
                 >
@@ -218,13 +231,11 @@ export default function NewLevelPage() {
 
       {/* OPTIONS & ANSWERS */}
       <div className="mb-6">
-        <label className="block text-sm font-medium mb-2">
-          Options & Answers
-        </label>
+        <label className="block text-sm font-medium mb-2">Options & Answers</label>
 
-        {level.options && level.options.length > 0 ? (
+        {safeLevel.options && safeLevel.options.length > 0 ? (
           <div className="space-y-2 mb-3">
-            {level.options.map((opt, i) => (
+            {safeLevel.options.map((opt, i) => (
               <div key={i} className="flex gap-2 items-center">
                 <span className="text-sm text-gray-600 w-8">{i + 1}.</span>
 
@@ -238,7 +249,7 @@ export default function NewLevelPage() {
                 <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap">
                   <input
                     type="checkbox"
-                    checked={level.answers && level.answers.includes(i)}
+                    checked={Array.isArray(safeLevel.answers) && safeLevel.answers.includes(i)}
                     onChange={() => toggleAnswer(i)}
                     className="w-4 h-4"
                   />
@@ -246,6 +257,7 @@ export default function NewLevelPage() {
                 </label>
 
                 <button
+                  type="button"
                   onClick={() => removeOption(i)}
                   className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
                 >
@@ -259,6 +271,7 @@ export default function NewLevelPage() {
         )}
 
         <button
+          type="button"
           onClick={addOption}
           className="bg-blue-600 text-white px-3 py-2 rounded flex items-center gap-2 hover:bg-blue-700"
         >
@@ -286,6 +299,7 @@ export default function NewLevelPage() {
         </button>
 
         <button
+          type="button"
           onClick={handleBack}
           className="border px-4 py-2 rounded hover:bg-gray-100"
         >
@@ -294,7 +308,7 @@ export default function NewLevelPage() {
       </div>
 
       <div className="mt-4 text-sm text-gray-500">
-        * After creating, you'll be redirected to the edit page where you can
+        * After creating, you&apos;ll be redirected to the edit page where you can
         continue working on your level.
       </div>
     </div>

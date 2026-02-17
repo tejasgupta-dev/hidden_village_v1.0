@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 function GameMenu({ mode }) {
@@ -34,6 +34,7 @@ function GameMenu({ mode }) {
 
         const res = await fetch("/api/games", {
           credentials: "include",
+          cache: "no-store",
         });
 
         const data = await res.json();
@@ -84,44 +85,67 @@ function GameMenu({ mode }) {
   /* =========================================
      NAVIGATION
   ========================================= */
-  const navigateToGame = (id, verifiedPin = null) => {
-    if (!id) return;
+  const navigateToGame = useCallback(
+    (id, verifiedPin = null) => {
+      if (!id) return;
 
-    if (verifiedPin) {
-      sessionStorage.setItem(`game_pin_${id}`, verifiedPin);
-    }
+      if (verifiedPin) {
+        sessionStorage.setItem(`game_pin_${id}`, verifiedPin);
+      }
 
-    if (playMode) {
-      router.push(`/game/${id}`);
-    } else {
-      router.push(`/game/edit/${id}`);
-    }
-  };
+      if (playMode) router.push(`/game/${id}`);
+      else router.push(`/game/edit/${id}`);
+    },
+    [playMode, router]
+  );
+
+  /* =========================================
+     PIN MODAL OPEN/CLOSE
+  ========================================= */
+  const openPinModal = useCallback((id) => {
+    setSelectedGameId(id);
+    setShowPinModal(true);
+    setPin("");
+    setPinError("");
+  }, []);
+
+  const closePinModal = useCallback(() => {
+    setShowPinModal(false);
+    setSelectedGameId(null);
+    setPin("");
+    setPinError("");
+  }, []);
 
   /* =========================================
      SELECT GAME
+     IMPORTANT: Do NOT use `hasPin` to decide modal.
+     Only use `preview:true` or `code:PIN_REQUIRED`.
   ========================================= */
   const handleSelectGame = async (id) => {
     try {
       const res = await fetch(`/api/games/${id}`, {
         credentials: "include",
+        cache: "no-store",
       });
 
       const data = await res.json();
 
-      if (!data.success) {
-        alert(data.message || "Failed to load game.");
+      // ✅ PIN gating signals ONLY
+      const pinGate =
+        data?.preview === true || (res.status === 403 && data?.code === "PIN_REQUIRED");
+
+      if (pinGate) {
+        openPinModal(id);
         return;
       }
 
-      if (data.hasPin) {
-        setSelectedGameId(id);
-        setShowPinModal(true);
-        setPin("");
-        setPinError("");
+      // Not a PIN gate -> show error if needed
+      if (!res.ok || !data?.success) {
+        alert(data?.message || "Failed to load game.");
         return;
       }
 
+      // ✅ Access granted (owner/admin/unlocked)
       navigateToGame(id);
     } catch (err) {
       console.error(err);
@@ -145,43 +169,32 @@ function GameMenu({ mode }) {
 
     try {
       const res = await fetch(`/api/games/${selectedGameId}`, {
-        headers: {
-          "x-game-pin": pin,
-        },
+        headers: { "x-game-pin": pin },
         credentials: "include",
+        cache: "no-store",
       });
 
       const data = await res.json();
 
-      if (data.success) {
+      if (data?.success) {
         setShowPinModal(false);
         navigateToGame(selectedGameId, pin);
       } else {
-        setPinError("Incorrect PIN");
+        setPinError(data?.message || "Incorrect PIN");
       }
     } catch (err) {
+      console.error(err);
       setPinError("Error verifying PIN");
     } finally {
       setPinLoading(false);
     }
   };
 
-  const closePinModal = () => {
-    setShowPinModal(false);
-    setSelectedGameId(null);
-    setPin("");
-    setPinError("");
-  };
-
   /* =========================================
      RENDER
   ========================================= */
-
-  if (loading)
-    return <p className="text-center text-gray-600">Loading games...</p>;
-
-  if (error)
-    return <p className="text-center text-red-600">⚠️ {error}</p>;
+  if (loading) return <p className="text-center text-gray-600">Loading games...</p>;
+  if (error) return <p className="text-center text-red-600">⚠️ {error}</p>;
 
   return (
     <>
@@ -199,28 +212,18 @@ function GameMenu({ mode }) {
 
         {filteredGames.length === 0 ? (
           <p className="text-center text-gray-600 py-8">
-            {playMode
-              ? "No published games available"
-              : "No games found"}
+            {playMode ? "No published games available" : "No games found"}
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full bg-white border rounded-lg">
               <thead className="bg-gray-100">
                 <tr>
-                  <th className="px-6 py-3 text-left text-sm font-semibold">
-                    Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold">
-                    Author
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold">
-                    Keywords
-                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold">Name</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold">Author</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold">Keywords</th>
                   {!playMode && (
-                    <th className="px-6 py-3 text-left text-sm font-semibold">
-                      Status
-                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold">Status</th>
                   )}
                 </tr>
               </thead>
@@ -234,31 +237,15 @@ function GameMenu({ mode }) {
                   >
                     <td className="px-6 py-4">
                       {game.name || "Untitled Game"}
-                      {game.hasPin && (
-                        <span className="ml-2 text-yellow-600">🔒</span>
-                      )}
+                      {game.hasPin && <span className="ml-2 text-yellow-600">🔒</span>}
                     </td>
-
-                    <td className="px-6 py-4">
-                      {game.author || "Unknown"}
-                    </td>
-
-                    <td className="px-6 py-4">
-                      {game.keywords || "None"}
-                    </td>
+                    <td className="px-6 py-4">{game.author || "Unknown"}</td>
+                    <td className="px-6 py-4">{game.keywords || "None"}</td>
 
                     {!playMode && (
                       <td className="px-6 py-4">
-                        <span
-                          className={
-                            game.isPublished
-                              ? "text-green-600"
-                              : "text-orange-600"
-                          }
-                        >
-                          {game.isPublished
-                            ? "✅ Published"
-                            : "❌ Draft"}
+                        <span className={game.isPublished ? "text-green-600" : "text-orange-600"}>
+                          {game.isPublished ? "✅ Published" : "❌ Draft"}
                         </span>
                       </td>
                     )}
@@ -274,9 +261,7 @@ function GameMenu({ mode }) {
       {showPinModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-xl font-bold mb-4">
-              Protected Game
-            </h3>
+            <h3 className="text-xl font-bold mb-4">Protected Game</h3>
 
             <form onSubmit={handlePinSubmit}>
               <input
@@ -288,11 +273,7 @@ function GameMenu({ mode }) {
                 autoFocus
               />
 
-              {pinError && (
-                <p className="text-red-600 text-sm mb-4">
-                  {pinError}
-                </p>
-              )}
+              {pinError && <p className="text-red-600 text-sm mb-4">{pinError}</p>}
 
               <div className="flex gap-3">
                 <button

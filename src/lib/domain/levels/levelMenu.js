@@ -13,6 +13,10 @@ export const levelMenu = {
     return levelsApi.list();
   },
 
+  async listPublished() {
+    return levelsApi.listPublished({ credentials: "include" });
+  },
+
   /**
    * Get a level's basic info for preview
    * @param {string} levelId - The level ID
