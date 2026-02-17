@@ -10,7 +10,6 @@ import PoseCapture from "@/components/Pose/poseCapture";
 export default function LevelEditPage() {
   const params = useParams();
   const { user } = useAuth();
-
   const levelId = params.id;
 
   const {
@@ -29,26 +28,61 @@ export default function LevelEditPage() {
     handleSave,
     handleDelete,
     handleBack,
-    getStoredPin, // comes from the hook (returns stored pin for THIS level)
+    getStoredPin, // returns stored pin for THIS level
   } = useLevelEditor(levelId, false, user?.email);
 
   const [editingPin, setEditingPin] = useState(false);
   const [pinValue, setPinValue] = useState("");
-  const [showPoseCapture, setShowPoseCapture] = useState(false);
-
   const pinRef = useRef(null);
 
-  // ✅ Sync pinValue when NOT editing, without depending on an unstable function identity
+  const [showPoseCapture, setShowPoseCapture] = useState(false);
+
+  // ✅ KEY FIX (same as GameEditor):
+  // If user clicks "Remove PIN", we suppress sessionStorage PIN from being displayed
+  // (but sessionStorage still remains for auth until save succeeds).
+  const [ignoreStoredPin, setIgnoreStoredPin] = useState(false);
+
+  /* ------------------ PIN SYNC (don’t overwrite while typing) ------------------ */
   useEffect(() => {
+    if (!level) return;
     if (editingPin) return;
 
-    const sessionPin = getStoredPin(); // safe to call
+    // If user removed pin locally, do NOT hydrate from sessionStorage anymore
+    if (ignoreStoredPin) {
+      setPinValue(level.pin || "");
+      return;
+    }
+
+    const sessionPin = getStoredPin?.() || "";
     setPinValue(level.pin || sessionPin || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingPin, level.pin, levelId]); // intentionally NOT depending on getStoredPin
+  }, [level?.pin, levelId, editingPin, ignoreStoredPin]);
+
+  // If level.pin becomes non-empty (e.g., after load or user sets it), stop ignoring storage
+  useEffect(() => {
+    if (!level) return;
+    if ((level.pin || "").trim()) {
+      setIgnoreStoredPin(false);
+    }
+  }, [level]);
+
+  const storedPin = !ignoreStoredPin ? (getStoredPin?.() || "") : "";
 
   // True if any source tells us a PIN exists
-  const hasPin = Boolean(level.pin) || Boolean(level.hasPin) || Boolean(getStoredPin());
+  const hasPin =
+    Boolean((level?.pin || "").trim()) ||
+    Boolean(level?.hasPin) ||
+    Boolean((storedPin || "").trim());
+
+  const handleRemovePin = () => {
+    // ✅ ONLY clear locally (draft). Do NOT touch sessionStorage here.
+    setLevel((prev) => ({ ...prev, pin: "" }));
+    setPinValue("");
+    setEditingPin(false);
+
+    // ✅ prevent UI from re-hydrating old session pin
+    setIgnoreStoredPin(true);
+  };
 
   if (loadingLevel) {
     return (
@@ -75,7 +109,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
           value={level.name || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, name: e.target.value }))
+          }
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -86,7 +122,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
           value={level.keywords || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, keywords: e.target.value }))
+          }
           placeholder="puzzle, challenge, easy"
           className="border p-2 w-full rounded"
         />
@@ -111,7 +149,9 @@ export default function LevelEditPage() {
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
           value={level.question || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
+          onChange={(e) =>
+            setLevel((prev) => ({ ...prev, question: e.target.value }))
+          }
           placeholder="What question should players answer?"
           className="border p-2 w-full rounded"
           rows={2}
@@ -119,8 +159,8 @@ export default function LevelEditPage() {
       </div>
 
       {/* PIN */}
-      <div className="mb-4">
-        <label className="block text-sm font-medium mb-2">PIN Protection</label>
+      <div className="mb-4 space-y-2">
+        <label className="block text-sm font-medium">PIN Protection</label>
 
         {editingPin ? (
           <div className="flex gap-2">
@@ -136,11 +176,17 @@ export default function LevelEditPage() {
             <button
               type="button"
               onClick={() => {
-                // draft only (sessionStorage updates on Save/Publish in your hook)
+                // draft only — handleSave updates sessionStorage AFTER success
                 setLevel((prev) => ({ ...prev, pin: pinValue }));
+
+                // if they typed a pin (non-empty), stop ignoring storage
+                if ((pinValue || "").trim()) setIgnoreStoredPin(false);
+                else setIgnoreStoredPin(true);
+
                 setEditingPin(false);
               }}
               className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+              title="Apply (draft)"
             >
               <Check size={16} />
             </button>
@@ -148,10 +194,12 @@ export default function LevelEditPage() {
             <button
               type="button"
               onClick={() => {
-                setPinValue(level.pin || getStoredPin() || "");
+                const sessionPin2 = !ignoreStoredPin ? getStoredPin?.() || "" : "";
+                setPinValue(level.pin || sessionPin2 || "");
                 setEditingPin(false);
               }}
               className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500"
+              title="Cancel"
             >
               <X size={16} />
             </button>
@@ -167,21 +215,21 @@ export default function LevelEditPage() {
                 PIN set (not returned by server)
               </span>
             ) : (
-              <span className="text-sm text-gray-400 px-3 py-2">No PIN set</span>
+              <span className="text-sm text-gray-400 px-3 py-2">
+                No PIN set
+              </span>
             )}
 
             <button
               type="button"
               onClick={() => {
-                // preload input from current display BEFORE enabling edit mode
-                const sessionPin = getStoredPin();
-                setPinValue(level.pin || sessionPin || "");
+                // allow using stored pin again as a starting point
+                setIgnoreStoredPin(false);
 
+                const sessionPin2 = getStoredPin?.() || "";
+                setPinValue(level.pin || sessionPin2 || "");
                 setEditingPin(true);
-
-                setTimeout(() => {
-                  if (pinRef.current) pinRef.current.focus();
-                }, 0);
+                setTimeout(() => pinRef.current?.focus(), 0);
               }}
               className="border px-3 py-2 rounded hover:bg-gray-100"
             >
@@ -191,11 +239,7 @@ export default function LevelEditPage() {
             {hasPin && (
               <button
                 type="button"
-                onClick={() => {
-                  // clear UI + draft only (sessionStorage cleared only on Save/Publish)
-                  setLevel((prev) => ({ ...prev, pin: "" }));
-                  setPinValue("");
-                }}
+                onClick={handleRemovePin}
                 className="text-red-600 hover:text-red-800 px-3 py-2"
               >
                 Remove PIN
@@ -203,6 +247,11 @@ export default function LevelEditPage() {
             )}
           </div>
         )}
+
+        <p className="text-xs text-gray-500">
+          After changing/removing the PIN, click Save Draft/Publish to apply it.
+          (Auth still uses the old stored PIN until the save succeeds.)
+        </p>
       </div>
 
       {/* POSES */}

@@ -4,77 +4,86 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import levelEditor from "../domain/levels/levelEditor";
 
-export const useLevelEditor = (levelId, isNew, userEmail) => {
+export const useLevelEditor = (levelId, isNew = false, userEmail) => {
   const router = useRouter();
 
-  const [level, setLevel] = useState({
-    id: null,
-    author: userEmail ?? "",
-    name: "",
-    keywords: "",
-    poses: {},
-    description: "",
-    question: "",
-    options: [],
-    answers: [],
-    isPublished: false,
-    pin: "", // draft pin (NOT guaranteed to equal stored session pin)
-  });
-
+  /* ------------------ CORE STATE ------------------ */
+  const [level, setLevel] = useState(null);
   const [loadingLevel, setLoadingLevel] = useState(true);
   const [savingLevel, setSavingLevel] = useState(false);
   const [message, setMessage] = useState("");
 
-  // ✅ Prevent double-load / double-prompt in dev StrictMode
+  // ✅ prevent double prompts in dev StrictMode
   const loadInFlightRef = useRef(false);
 
   /* ------------------ PIN STORAGE ------------------ */
+  const storageKey = (id) => `level_pin_${id}`;
+
   const getStoredPin = useCallback((id) => {
     if (typeof window === "undefined" || !id) return "";
-    return sessionStorage.getItem(`level_pin_${id}`) || "";
+    return sessionStorage.getItem(storageKey(id)) || "";
   }, []);
 
   const setStoredPin = useCallback((id, pin) => {
     if (typeof window === "undefined" || !id) return;
-    sessionStorage.setItem(`level_pin_${id}`, pin);
+    sessionStorage.setItem(storageKey(id), pin);
   }, []);
 
   const clearStoredPin = useCallback((id) => {
     if (typeof window === "undefined" || !id) return;
-    sessionStorage.removeItem(`level_pin_${id}`);
+    sessionStorage.removeItem(storageKey(id));
   }, []);
 
   const getErrStatus = (err) =>
     err?.status || err?.response?.status || err?.cause?.status;
 
-  /* ================= LOAD ================= */
+  /* ------------------ LOAD LEVEL ------------------ */
   const loadLevel = useCallback(async () => {
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
 
     setLoadingLevel(true);
+    setMessage("");
 
     try {
+      if (isNew) {
+        setLevel({
+          id: null,
+          author: userEmail ?? "",
+          authorUid: "",
+          name: "",
+          keywords: "",
+          poses: {},
+          description: "",
+          question: "",
+          options: [],
+          answers: [],
+          isPublished: false,
+          pin: "", // draft pin (mirrors sessionStorage once set)
+        });
+        return;
+      }
+
       if (!levelId) {
         router.replace("/level/menu");
         return;
       }
 
-      // 1) Try stored PIN if we have one
+      // 1) Try stored pin first (if any)
       const storedPin = getStoredPin(levelId);
 
       if (storedPin) {
         try {
           const res = await levelEditor.load(levelId, { pin: storedPin });
           if (res?.success) {
-            setLevel({ ...res.level, id: levelId });
+            // ✅ KEY FIX (match GameEditor):
+            // seed UI pin from stored pin (server may not return pin)
+            setLevel({ ...res.level, id: levelId, pin: storedPin });
             return;
           }
-          // if API returns non-throwing failure (rare), fall through
         } catch (err) {
-          // stored pin is wrong or pin required -> clear & fall through to prompt flow
-          const status = getErrStatus(err);
-          if (status === 403) {
+          // stored pin bad => clear and fall through to prompt flow
+          if (getErrStatus(err) === 403) {
             clearStoredPin(levelId);
           } else {
             throw err;
@@ -82,19 +91,20 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         }
       }
 
-      // 2) No stored PIN (or it failed). Ask server without PIN.
+      // 2) Try loading without pin (may return preview OR may throw 403)
       let response;
       try {
-        response = await levelEditor.load(levelId); // no pin header at all
+        response = await levelEditor.load(levelId);
       } catch (err) {
-        // If even no-pin request is forbidden, treat as pin required
-        const status = getErrStatus(err);
-        if (status !== 403) throw err;
-        response = { preview: true, hasPin: true };
+        if (getErrStatus(err) === 403) {
+          response = { preview: true, hasPin: true };
+        } else {
+          throw err;
+        }
       }
 
-      // 3) If protected, prompt user to type PIN (allow retries)
-      if (response?.preview && response?.hasPin) {
+      // 3) If protected, prompt user to type pin (allow retries)
+      if (response?.preview || response?.hasPin) {
         let attempts = 0;
 
         while (attempts < 3) {
@@ -108,14 +118,13 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
             const retry = await levelEditor.load(levelId, { pin: enteredPin });
             if (retry?.success) {
               setStoredPin(levelId, enteredPin);
-              setLevel({ ...retry.level, id: levelId });
+              // ✅ seed UI pin from entered pin
+              setLevel({ ...retry.level, id: levelId, pin: enteredPin });
               return;
             }
-
-            alert(retry?.message || "Invalid PIN");
+            alert("Invalid PIN");
           } catch (err) {
-            const status = getErrStatus(err);
-            if (status === 403) {
+            if (getErrStatus(err) === 403) {
               alert("Invalid PIN");
             } else {
               throw err;
@@ -129,110 +138,85 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
         return;
       }
 
-      // 4) Normal (unprotected) load
+      // 4) Unprotected load
       if (!response?.success) {
-        alert(response?.message || "Failed to load level.");
+        alert(response?.message || "Failed to load level");
         router.replace("/level/menu");
         return;
       }
 
-      setLevel({ ...response.level, id: levelId });
+      // ✅ keep UI pin stable from sessionStorage (likely "")
+      const stillStored = getStoredPin(levelId);
+      setLevel({ ...response.level, id: levelId, pin: stillStored || "" });
     } catch (err) {
       console.error("Error loading level:", err);
-      alert("Unexpected error loading level.");
+      alert("Error loading level");
       router.replace("/level/menu");
     } finally {
       loadInFlightRef.current = false;
       setLoadingLevel(false);
     }
-  }, [levelId, router, getStoredPin, setStoredPin, clearStoredPin]);
+  }, [levelId, isNew, router, userEmail, getStoredPin, setStoredPin, clearStoredPin]);
 
-  useEffect(() => {
-    if (isNew) {
-      setLoadingLevel(false);
-      return;
-    }
-    if (levelId) loadLevel();
-  }, [levelId, isNew, loadLevel]);
-
-  /* ================= SAVE =================
-     handleSave can optionally accept a pinOverride to store in sessionStorage.
-     Example: handleSave(true, pinValue)
-  */
+  /* ------------------ SAVE LEVEL ------------------ */
   const handleSave = useCallback(
-    async (publish = false, pinOverride) => {
+    async (publish = false) => {
       if (!level) return;
-
       setSavingLevel(true);
       setMessage("");
 
       try {
         let response;
 
-        // Draft pin we want to persist (if provided explicitly, prefer that)
-        const pinToStore =
-          typeof pinOverride === "string" ? pinOverride : level.pin;
-
-        // PIN used for auth headers when calling API:
-        // prefer stored pin (what the server expects now),
-        // fall back to pinOverride/draft if user is changing it.
-        const storedPin = levelId ? getStoredPin(levelId) : "";
-        const authPin = storedPin || pinToStore || "";
-        const authOpts = authPin ? { pin: authPin } : undefined;
-
-        if (isNew || !level.id) {
-          response = await levelEditor.create({
-            ...level,
-            isPublished: publish,
-          });
+        if (isNew) {
+          response = await levelEditor.create({ ...level, isPublished: publish });
 
           if (response?.success && response?.id) {
-            // ✅ allow handleSave to set session pin before navigation
-            if (pinToStore) setStoredPin(response.id, pinToStore);
-            else clearStoredPin(response.id);
+            const newId = response.id;
 
-            router.replace(`/level/edit/${response.id}`);
+            // ✅ after success, mirror "draft pin" to sessionStorage
+            const desiredPin = (level.pin || "").trim();
+            if (desiredPin) setStoredPin(newId, desiredPin);
+            else clearStoredPin(newId);
+
+            router.replace(`/level/edit/${newId}`);
             return;
           }
         } else {
-          if (!levelId) {
-            setMessage("No level ID for update");
-            return;
-          }
+          if (!levelId) throw new Error("Missing levelId for save");
 
-          try {
-            response = await levelEditor.save(
-              levelId,
-              { ...level, isPublished: publish },
-              authOpts
-            );
-          } catch (err) {
-            const status = getErrStatus(err);
-            if (status === 403) {
-              clearStoredPin(levelId);
-              setMessage("PIN required or invalid. Please reload the page.");
-              return;
-            }
-            throw err;
-          }
+          // ✅ IMPORTANT (match GameEditor):
+          // Always authenticate using the currently stored pin (old pin),
+          // even if user is removing/changing it in the draft.
+          const authPin = getStoredPin(levelId);
+          const opts = authPin ? { pin: authPin } : undefined;
 
-          // ✅ after successful save, update session storage pin (new pin or cleared pin)
-          if (response?.success) {
-            if (pinToStore) setStoredPin(levelId, pinToStore);
-            else clearStoredPin(levelId);
-          }
-        }
+          response = await levelEditor.save(
+            levelId,
+            { ...level, isPublished: publish },
+            opts
+          );
 
-        if (!response?.success) {
-          setMessage(response?.message || "Failed to save.");
+          if (!response?.success) throw new Error("Save failed");
+
+          // ✅ after success, mirror "draft pin" to sessionStorage
+          const desiredPin = (level.pin || "").trim();
+          if (desiredPin) setStoredPin(levelId, desiredPin);
+          else clearStoredPin(levelId);
+
+          // ✅ keep UI pin stable (server may not return pin)
+          const stillStored = getStoredPin(levelId);
+          setLevel({ ...response.level, id: levelId, pin: stillStored || "" });
+
+          alert(publish ? "Level published!" : "Draft saved!");
           return;
         }
 
-        setLevel({ ...response.level, id: response.level.id });
-        alert(publish ? "Level published!" : "Draft saved!");
+        if (!response?.success) throw new Error("Save failed");
       } catch (err) {
         console.error("Error saving level:", err);
-        setMessage(err?.message || "Unexpected error saving.");
+        setMessage("Error saving level");
+        alert("Error saving level");
       } finally {
         setSavingLevel(false);
       }
@@ -240,78 +224,50 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     [level, levelId, isNew, router, getStoredPin, setStoredPin, clearStoredPin]
   );
 
-  /* ================= DELETE ================= */
-  const handleDelete = async () => {
-    if (!window.confirm("Delete this level?")) return;
-
-    if (!levelId) {
-      alert("No level ID to delete");
-      return;
-    }
+  /* ------------------ DELETE LEVEL ------------------ */
+  const handleDelete = useCallback(async () => {
+    if (!confirm("Delete this level?")) return;
+    if (!levelId) return;
 
     try {
-      const storedPin = getStoredPin(levelId);
-      const opts = storedPin ? { pin: storedPin } : undefined;
+      const authPin = getStoredPin(levelId);
+      const opts = authPin ? { pin: authPin } : undefined;
 
-      try {
-        const response = await levelEditor.delete(levelId, opts);
-        if (!response?.success) {
-          alert(response?.message || "Failed to delete.");
-          return;
-        }
-      } catch (err) {
-        const status = getErrStatus(err);
-        if (status === 403) {
-          clearStoredPin(levelId);
-          alert("PIN required or invalid.");
-          return;
-        }
-        throw err;
-      }
+      const response = await levelEditor.delete(levelId, opts);
+      if (!response?.success) throw new Error("Delete failed");
 
       clearStoredPin(levelId);
-      alert("Level deleted.");
       router.replace("/level/menu");
     } catch (err) {
       console.error("Error deleting level:", err);
-      alert("Unexpected error deleting.");
+      alert("Error deleting level");
     }
-  };
+  }, [levelId, router, getStoredPin, clearStoredPin]);
 
-  /* ================= POSE MANAGEMENT ================= */
+  /* ------------------ POSE / OPTIONS / ANSWERS HELPERS ------------------ */
   const addPose = (key, value) => {
-    setLevel((prev) => ({
-      ...prev,
-      poses: { ...prev.poses, [key]: value },
-    }));
+    setLevel((prev) => ({ ...prev, poses: { ...(prev?.poses || {}), [key]: value } }));
   };
 
   const updatePose = (key, value) => {
-    setLevel((prev) => ({
-      ...prev,
-      poses: { ...prev.poses, [key]: value },
-    }));
+    setLevel((prev) => ({ ...prev, poses: { ...(prev?.poses || {}), [key]: value } }));
   };
 
   const removePose = (key) => {
     setLevel((prev) => {
-      const newPoses = { ...prev.poses };
+      const newPoses = { ...(prev?.poses || {}) };
       delete newPoses[key];
       return { ...prev, poses: newPoses };
     });
   };
 
-  /* ================= OPTION MANAGEMENT ================= */
   const addOption = () => {
-    setLevel((prev) => ({
-      ...prev,
-      options: [...prev.options, ""],
-    }));
+    setLevel((prev) => ({ ...prev, options: [...(prev?.options || []), ""] }));
   };
 
   const updateOption = (index, value) => {
     setLevel((prev) => {
-      const newOptions = [...prev.options];
+      const newOptions = [...(prev?.options || [])];
       newOptions[index] = value;
       return { ...prev, options: newOptions };
     });
@@ -319,28 +275,31 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
 
   const removeOption = (index) => {
     setLevel((prev) => {
-      const newOptions = prev.options.filter((_, i) => i !== index);
-      const newAnswers = (prev.answers || [])
+      const newOptions = (prev?.options || []).filter((_, i) => i !== index);
+      const newAnswers = (prev?.answers || [])
         .filter((ans) => ans !== index)
         .map((ans) => (ans > index ? ans - 1 : ans));
       return { ...prev, options: newOptions, answers: newAnswers };
     });
   };
 
-  /* ================= ANSWER MANAGEMENT ================= */
   const toggleAnswer = (index) => {
     setLevel((prev) => {
-      const answers = prev.answers || [];
+      const answers = prev?.answers || [];
       const isCorrect = answers.includes(index);
-
-      if (isCorrect) {
-        return { ...prev, answers: answers.filter((ans) => ans !== index) };
-      }
-      return { ...prev, answers: [...answers, index] };
+      return {
+        ...prev,
+        answers: isCorrect ? answers.filter((a) => a !== index) : [...answers, index],
+      };
     });
   };
 
   const handleBack = () => router.back();
+
+  /* ------------------ INIT ------------------ */
+  useEffect(() => {
+    if (levelId || isNew) loadLevel();
+  }, [levelId, isNew, loadLevel]);
 
   return {
     level,
@@ -348,6 +307,7 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     loadingLevel,
     savingLevel,
     message,
+
     addPose,
     updatePose,
     removePose,
@@ -355,9 +315,13 @@ export const useLevelEditor = (levelId, isNew, userEmail) => {
     updateOption,
     removeOption,
     toggleAnswer,
+
+    loadLevel,
     handleSave,
     handleDelete,
     handleBack,
+
+    // expose for UI
     getStoredPin: () => getStoredPin(levelId),
   };
 };

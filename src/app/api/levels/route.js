@@ -4,32 +4,32 @@ import { requireSession } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-// GET handler — fetches all levels from the Realtime Database
+// GET handler — fetches all levels from the Realtime Database (LevelList)
 export async function GET(req) {
   try {
     const snapshot = await db.ref("LevelList").get();
 
     if (!snapshot.exists()) {
-      return NextResponse.json({
-        success: true,
-        levels: [],
-      });
+      return NextResponse.json({ success: true, levels: [] });
     }
+
     const data = snapshot.val();
 
-    const levels = Object.entries(data).map(([id, level]) => ({
-      id,
-      name: level.name || "",
-      author: level.author || "anonymous",
-      authorUid: level.authorUid || "",
-      isPublished: level.isPublished || false,
-      keywords: level.keywords || "",
-    }));
+    const levels = Object.entries(data).map(([id, level]) => {
+      const published =
+        level?.isPublished === true || level?.isPublished === "true";
 
-    return NextResponse.json({
-      success: true,
-      levels,
+      return {
+        id,
+        name: level?.name || "",
+        author: level?.author || "anonymous",
+        authorUid: level?.authorUid || "",
+        isPublished: published,
+        keywords: level?.keywords || "",
+      };
     });
+
+    return NextResponse.json({ success: true, levels });
   } catch (err) {
     console.error("GET /levels error:", err);
     return NextResponse.json(
@@ -41,7 +41,6 @@ export async function GET(req) {
 
 // POST handler — creates a new level
 export async function POST(req) {
-  // Ensure the user is logged in
   const { success, user, response } = await requireSession(req);
   if (!success) return response;
 
@@ -88,6 +87,9 @@ export async function POST(req) {
       );
     }
 
+    // Normalize publish boolean
+    const published = isPublished === true || isPublished === "true";
+
     const levelRef = db.ref("level").push();
     const levelId = levelRef.key;
 
@@ -98,7 +100,7 @@ export async function POST(req) {
       answers,
       keywords,
       pin,
-      isPublished,
+      isPublished: published,
       poses,
       author: user.email || "anonymous",
       authorUid: user.uid,
@@ -110,7 +112,7 @@ export async function POST(req) {
       name,
       author: user.email || "anonymous",
       authorUid: user.uid,
-      isPublished,
+      isPublished: published,
       keywords,
     };
 
