@@ -118,6 +118,16 @@ export function useGameEditor(id, isNew = false, userEmail) {
 
       if (!response.success) throw new Error("Save failed");
       setGame(response.game);
+
+      const pinToStore = game.pin?.trim() || "";
+      const storageKeyId = isNew ? response.game.id : id;
+
+      if (pinToStore.length > 0) {
+        sessionStorage.setItem(`game_pin_${storageKeyId}`, pinToStore);
+      } else {
+        sessionStorage.removeItem(`game_pin_${storageKeyId}`);
+      }
+
     } catch (err) {
       console.error("Error saving game", err);
       alert("Error saving game");
