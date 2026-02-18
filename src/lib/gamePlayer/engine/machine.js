@@ -20,7 +20,6 @@ import {
 
 // Controllers
 import { introController } from "../states/intro/controller";
-import { dialogueController } from "../states/dialogue/controller";
 import { tweenController } from "../states/tween/controller";
 import { poseMatchController } from "../states/poseMatch/controller";
 import { insightController } from "../states/insight/controller";
@@ -32,7 +31,6 @@ import { outroController } from "../states/outro/controller";
  */
 const CONTROLLERS = Object.freeze({
   [STATE_TYPES.INTRO]: introController,
-  [STATE_TYPES.DIALOGUE]: dialogueController,
   [STATE_TYPES.TWEEN]: tweenController,
   [STATE_TYPES.POSE_MATCH]: poseMatchController,
   [STATE_TYPES.INSIGHT]: insightController,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 
 function DefaultSpeakerSprite() {
@@ -34,25 +34,6 @@ export default function IntroView({ session, node, dispatch }) {
       : node?.speaker?.name ?? "Guide";
 
   const avatarUrl = node?.speaker?.avatarUrl ?? null;
-
-  // Autoplay: advance dialogue every 10s (per line)
-  const autoMS = 10_000;
-
-  const nodeIndexRef = useRef(session?.nodeIndex ?? 0);
-  nodeIndexRef.current = session?.nodeIndex ?? 0;
-
-  useEffect(() => {
-    if (!lines.length) return;
-
-    const startNodeIndex = nodeIndexRef.current;
-
-    const t = window.setTimeout(() => {
-      if (nodeIndexRef.current !== startNodeIndex) return;
-      dispatch(commands.next());
-    }, autoMS);
-
-    return () => window.clearTimeout(t);
-  }, [dispatch, idx, lines.length]);
 
   const onNext = () => dispatch(commands.next());
 
@@ -99,7 +80,7 @@ export default function IntroView({ session, node, dispatch }) {
               )}
             </div>
 
-            {/* Large hover-friendly button */}
+            {/* Next button (mouse click or PoseCursor hover triggers DOM click) */}
             <div className="shrink-0 flex flex-col items-end gap-4">
               <div className="p-4">
                 <button

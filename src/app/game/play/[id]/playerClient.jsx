@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import GamePlayerRoot from "@/lib/gamePlayer/gamePlayerRoot";
 
 export default function GamePlayerClient({ game, levels, levelIndex }) {
+  const router = useRouter();
   const gameWithLevels = { ...game, levels };
 
   return (
@@ -10,7 +12,9 @@ export default function GamePlayerClient({ game, levels, levelIndex }) {
       game={gameWithLevels}
       levelIndex={levelIndex}
       deviceId="web"
-      onComplete={() => {}}
+      onComplete={() => {
+        router.back();
+      }}
     />
   );
 }

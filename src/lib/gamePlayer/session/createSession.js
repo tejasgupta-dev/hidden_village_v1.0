@@ -53,7 +53,6 @@ export function createSession({
   }
 
   const levels = Array.isArray(game.levels) ? game.levels : [];
-  const storyline = Array.isArray(game.storyline) ? game.storyline : [];
 
   const levelIndex =
     typeof initialLevel === "number" && initialLevel >= 0 ? initialLevel : 0;
@@ -68,9 +67,6 @@ export function createSession({
 
   const settings = mergeSettings(DEFAULT_SETTINGS, levelObj?.settings ?? {});
 
-  // Story for this level index (intro/outro)
-  const storyRaw = storyline[levelIndex] ?? null;
-
   // Prefer explicit authored nodes if you ever add them later (on level)
   let levelStateNodes =
     levelObj?.stateNodes ??
@@ -78,10 +74,12 @@ export function createSession({
     levelObj?.nodes ??
     null;
 
+  // ✅ Build nodes dynamically (do NOT use storyRaw; builder reads game.storyline[levelIndex])
   if (!Array.isArray(levelStateNodes) || levelStateNodes.length === 0) {
     levelStateNodes = buildStateNodesForLevel({
-      level: levelRaw, // pass raw, builder can unwrap
-      story: storyRaw, // raw story node (plain or doc)
+      level: levelRaw,   // pass raw, builder can unwrap
+      story: game,       // ✅ pass full game (contains storyline array)
+      levelIndex,        // ✅ builder selects storyline[levelIndex]
     });
   }
 
@@ -102,8 +100,7 @@ export function createSession({
       ? Math.min(initialNodeIndex, Math.max(0, levelStateNodes.length - 1))
       : 0;
 
-  const now =
-    typeof performance !== "undefined" ? performance.now() : Date.now();
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
 
   return {
     version: 1,
