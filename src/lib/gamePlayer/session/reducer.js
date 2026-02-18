@@ -3,6 +3,7 @@
 import { createSession } from "./createSession";
 import { scheduleIn, cancelTimersByTag, runDueTimers } from "./timers";
 import { STATE_TYPES, normalizeStateType } from "../states/_shared/stateTypes";
+import { createNextHandler } from "./nextHandlers";
 
 function pushEffect(session, effect) {
   return { ...session, effects: [...(session.effects ?? []), effect] };
@@ -109,7 +110,6 @@ export function applyCommand(session, name, payload) {
         event: { type: "RESUME", at: session.time.now },
       });
 
-      // Re-schedule cursor delay if we resumed in a dialogue-like node
       next = scheduleCursorIfDialogueLike(next);
       return next;
     }
@@ -167,11 +167,9 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     flags: { ...session.flags, showCursor: false },
   };
 
-  // Cancel node-scoped timers
   next = cancelTimersByTag(next, "cursorDelay");
   next = cancelTimersByTag(next, `auto:${nodeIndex}`);
 
-  // Reset dialogueIndex whenever we enter a dialogue-like node
   if (isDialogueLikeType(t)) {
     next = { ...next, dialogueIndex: 0 };
   }
@@ -187,7 +185,6 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     },
   });
 
-  // Let the root know whether we should record pose frames in this node
   next = pushEffect(next, {
     type: "POSE_RECORDING_HINT",
     enabled:
@@ -224,7 +221,6 @@ function goNextNode(session, { reason } = {}) {
   const nextIndex = session.nodeIndex + 1;
 
   if (nextIndex >= (session.levelStateNodes?.length ?? 0)) {
-    // exit current node for consistent telemetry
     let done = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
 
     done = pushEffect(done, {
@@ -240,72 +236,17 @@ function goNextNode(session, { reason } = {}) {
   return next;
 }
 
+/* ----------------------------- NEXT handler (pluggable) ----------------------------- */
 
-function handleNext(session) {
-  const node = currentNode(session);
-  const t = nodeType(node);
-
-  // Intro / Dialogue / Outro all behave the same for dialogue advancement
-  if (isDialogueLikeType(t)) {
-    const lines = node?.lines ?? node?.dialogues ?? [];
-    const nextDialogueIndex = (session.dialogueIndex ?? 0) + 1;
-
-    // If there are lines, step through them
-    if (Array.isArray(lines) && lines.length > 0) {
-      // ✅ cancel any pending auto-next for this node when user advances manually
-      let next = cancelTimersByTag(session, `auto:${session.nodeIndex}`);
-
-      if (nextDialogueIndex < lines.length) {
-        next = {
-          ...next,
-          dialogueIndex: nextDialogueIndex,
-          flags: { ...next.flags, showCursor: false },
-        };
-
-        next = cancelTimersByTag(next, "cursorDelay");
-
-        next = pushEffect(next, {
-          type: "TELEMETRY_EVENT",
-          event: {
-            type: "DIALOGUE_NEXT",
-            at: next.time.now,
-            nodeIndex: next.nodeIndex,
-            stateType: t,
-            dialogueIndex: nextDialogueIndex,
-          },
-        });
-
-        // Re-schedule cursor delay + re-schedule auto-next for the next line
-        next = scheduleCursorIfDialogueLike(next);
-        next = maybeScheduleAutoAdvance(next);
-        return next;
-      }
-
-      // end of lines -> next node
-      next = pushEffect(next, {
-        type: "TELEMETRY_EVENT",
-        event: {
-          type: "DIALOGUE_END",
-          at: next.time.now,
-          nodeIndex: next.nodeIndex,
-          stateType: t,
-        },
-      });
-
-      // ✅ prevent any leftover timers from firing after node exit
-      next = cancelTimersByTag(next, "cursorDelay");
-      next = cancelTimersByTag(next, `auto:${next.nodeIndex}`);
-
-      return goNextNode(next, { reason: "DIALOGUE_FINISHED" });
-    }
-
-    // If no lines provided, treat NEXT as node advance
-    return goNextNode(session, { reason: "NO_DIALOGUE_LINES" });
-  }
-
-  // Non-dialogue nodes: NEXT advances to next node
-  return goNextNode(session, { reason: "NEXT_COMMAND" });
-}
+const handleNext = createNextHandler({
+  currentNode,
+  nodeType,
+  pushEffect,
+  cancelTimersByTag,
+  scheduleCursorIfDialogueLike,
+  maybeScheduleAutoAdvance,
+  goNextNode,
+});
 
 /* ----------------------------- Timers ----------------------------- */
 
@@ -315,15 +256,17 @@ function applyTimer(session, timer) {
       let next = { ...session, flags: { ...session.flags, showCursor: true } };
       return pushEffect(next, {
         type: "TELEMETRY_EVENT",
-        event: { type: "CURSOR_SHOWN", at: session.time.now, nodeIndex: session.nodeIndex },
+        event: {
+          type: "CURSOR_SHOWN",
+          at: session.time.now,
+          nodeIndex: session.nodeIndex,
+        },
       });
     }
 
-    // ✅ Dialogue-like nodes auto-advance by running the same logic as clicking Next
     case "AUTO_NEXT":
       return handleNext(session);
 
-    // ✅ Non-dialogue nodes auto-advance to the next node
     case "AUTO_ADVANCE":
       return goNextNode(session, { reason: "AUTO_ADVANCE" });
 
@@ -337,10 +280,7 @@ function scheduleCursorIfDialogueLike(session) {
   const t = nodeType(node);
   if (!isDialogueLikeType(t)) return session;
 
-  const delayMS =
-    node?.cursorDelayMS ??
-    session.settings?.cursor?.delayMS ??
-    0;
+  const delayMS = node?.cursorDelayMS ?? session.settings?.cursor?.delayMS ?? 0;
 
   let next = cancelTimersByTag(session, "cursorDelay");
 
@@ -363,29 +303,15 @@ function maybeScheduleAutoAdvance(session) {
   if (!autoMS) return session;
 
   const tag = `auto:${session.nodeIndex}`;
-
-  // don't double-schedule
-  if ((session.timers ?? []).some((t) => t.tag === tag)) {
-    return session;
-  }
+  if ((session.timers ?? []).some((t) => t.tag === tag)) return session;
 
   const t = nodeType(node);
 
-  // ✅ For dialogue-like nodes, "auto advance" means "Next line"
   if (isDialogueLikeType(t)) {
-    return scheduleIn(session, {
-      tag,
-      kind: "AUTO_NEXT",
-      delayMS: autoMS,
-    });
+    return scheduleIn(session, { tag, kind: "AUTO_NEXT", delayMS: autoMS });
   }
 
-  // ✅ For non-dialogue nodes, "auto advance" means "Next node"
-  return scheduleIn(session, {
-    tag,
-    kind: "AUTO_ADVANCE",
-    delayMS: autoMS,
-  });
+  return scheduleIn(session, { tag, kind: "AUTO_ADVANCE", delayMS: autoMS });
 }
 
 /* ----------------------------- Settings util ----------------------------- */
