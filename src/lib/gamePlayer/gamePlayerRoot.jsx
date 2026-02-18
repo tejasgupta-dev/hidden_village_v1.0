@@ -37,6 +37,14 @@ async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * ✅ Prevent duplicate "startup" telemetry per playId even if GamePlayerInner remounts
+ * (e.g., dev StrictMode mount/unmount/mount).
+ *
+ * Module scope survives remounts within the same tab session.
+ */
+const __startupTelemetrySentForPlay = new Set();
+
 export default function GamePlayerRoot({
   game,
   levelIndex = 0,
@@ -61,7 +69,6 @@ export default function GamePlayerRoot({
     setCreatingPlay(true);
     setCreateError(null);
 
-    // Retry helps when auth/session cookies aren't ready yet right after navigation
     const maxAttempts = 6;
 
     try {
@@ -87,7 +94,6 @@ export default function GamePlayerRoot({
         const text = await res.text().catch(() => "");
         const msg = `Failed to create play (${res.status}): ${text}`;
 
-        // Auth/session races: retry
         if ((res.status === 401 || res.status === 403) && attempt < maxAttempts) {
           await sleep(250 * attempt);
           continue;
@@ -130,15 +136,12 @@ export default function GamePlayerRoot({
             {createError}
           </div>
         ) : (
-          <div className="text-sm text-white/60">
-            Waiting for session + creating play…
-          </div>
+          <div className="text-sm text-white/60">Waiting for session + creating play…</div>
         )}
 
         <button
           type="button"
           onClick={() => {
-            // Allow manual retry even if StrictMode guard tripped earlier
             createdOnceRef.current = true;
             void createPlay();
           }}
@@ -241,17 +244,38 @@ function GamePlayerInner({
   useEffect(() => {
     if (!session.effects?.length) return;
 
+    const bus = telemetryRef.current;
+    if (!bus) {
+      dispatch(commands.consumeEffects());
+      return;
+    }
+
+    // ✅ Only allow the startup trio once per playId (prevents "page reload" double fire)
+    const startupAlreadySent = __startupTelemetrySentForPlay.has(playId);
+    if (!startupAlreadySent) {
+      __startupTelemetrySentForPlay.add(playId);
+    }
+
     for (const eff of session.effects) {
       if (eff.type === "TELEMETRY_EVENT") {
-        const bus = telemetryRef.current;
-        if (!bus) continue;
         const evt = eff.event;
-        bus.emitEvent(evt.type, { ...evt, playId }, evt.at ?? Date.now());
+
+        if (startupAlreadySent) {
+          if (evt?.type === "SESSION_START" || evt?.type === "STATE_ENTER") {
+            continue;
+          }
+        }
+
+        // ✅ Fix payload shape: do not spread whole evt into payload
+        const { type, at, ...payload } = evt || {};
+        bus.emitEvent(type, { ...payload, playId }, at ?? Date.now());
       }
 
       if (eff.type === "POSE_RECORDING_HINT") {
+        if (startupAlreadySent) continue;
+
         shouldRecordPoseRef.current = !!eff.enabled;
-        telemetryRef.current?.emitEvent("POSE_RECORDING_HINT", {
+        bus.emitEvent("POSE_RECORDING_HINT", {
           playId,
           enabled: !!eff.enabled,
           stateType: eff.stateType,
@@ -260,7 +284,7 @@ function GamePlayerInner({
       }
 
       if (eff.type === "ON_COMPLETE") {
-        telemetryRef.current?.emitEvent("PLAY_COMPLETE", {
+        bus.emitEvent("PLAY_COMPLETE", {
           playId,
           levelId: session.levelId,
           gameId: session.gameId,
@@ -270,7 +294,7 @@ function GamePlayerInner({
     }
 
     dispatch(commands.consumeEffects());
-  }, [session.effects, session.levelId, session.gameId, onComplete, playId]);
+  }, [session.effects, session.levelId, session.gameId, onComplete, playId, dispatch]);
 
   // PoseCursor click → NEXT
   const handleCursorClick = useCallback(() => {
@@ -324,7 +348,11 @@ function GamePlayerInner({
       <div className="absolute inset-0">
         {level?.background ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={level.background} alt="" className="w-full h-full object-cover opacity-90" />
+          <img
+            src={level.background}
+            alt=""
+            className="w-full h-full object-cover opacity-90"
+          />
         ) : (
           <div className="w-full h-full bg-gradient-to-b from-gray-900 to-black" />
         )}
