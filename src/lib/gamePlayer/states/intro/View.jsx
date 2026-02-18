@@ -1,81 +1,133 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { commands } from "@/lib/gamePlayer/session/commands";
 
-// Normalize a dialogue line into a safe shape:
-// - supports string lines: "Hello"
-// - supports object lines: { text, speaker } (your Firebase shape)
-// - supports common alternates: { line }, { message }, etc.
-function normalizeLine(line, fallbackSpeaker) {
-  if (line == null) return { text: "", speaker: fallbackSpeaker ?? null };
-
-  // string
-  if (typeof line === "string") {
-    return { text: line, speaker: fallbackSpeaker ?? null };
-  }
-
-  // object
-  if (typeof line === "object") {
-    const text =
-      line.text ??
-      line.line ??
-      line.message ??
-      line.value ??
-      "";
-
-    const speaker =
-      line.speaker ??
-      line.speakerName ??
-      fallbackSpeaker ??
-      null;
-
-    return { text: String(text ?? ""), speaker };
-  }
-
-  // number/boolean/etc
-  return { text: String(line), speaker: fallbackSpeaker ?? null };
+function DefaultSpeakerSprite() {
+  return (
+    <div className="h-28 w-28 rounded-3xl bg-white/10 ring-1 ring-white/20 flex items-center justify-center">
+      <div className="h-16 w-16 rounded-full bg-white/15 flex items-center justify-center text-white/80 font-semibold text-xl">
+        G
+      </div>
+    </div>
+  );
 }
 
-export default function IntroView({ session, node, dispatch, poseDataRef }) {
-  const lines = Array.isArray(node?.lines) ? node.lines : [];
+export default function IntroView({ session, node, dispatch }) {
+  const lines = useMemo(() => {
+    const arr = node?.lines ?? node?.dialogues ?? [];
+    return Array.isArray(arr) ? arr : [];
+  }, [node]);
+
   const idx = session?.dialogueIndex ?? 0;
 
-  const current = useMemo(() => {
-    const raw = lines[idx];
-    return normalizeLine(raw, node?.speaker ?? { name: "Guide" });
-  }, [lines, idx, node?.speaker]);
+  // Support both string lines AND { text, speaker } objects
+  const rawLine = lines[idx] ?? "";
+  const line =
+    typeof rawLine === "object" && rawLine !== null ? rawLine.text ?? "" : rawLine;
 
-  const speakerName = useMemo(() => {
-    // speaker can be {name}, or just a string, or null
-    const s = current?.speaker ?? node?.speaker;
-    if (!s) return "Guide";
-    if (typeof s === "string") return s;
-    return s.name ?? s.label ?? "Guide";
-  }, [current?.speaker, node?.speaker]);
+  const showCursor = !!session?.flags?.showCursor;
 
-  // optional: your existing autoplay logic might live here.
-  // I’m leaving behavior unchanged unless you already had timers.
-  const didMount = useRef(false);
+  const speakerName =
+    typeof rawLine === "object" && rawLine?.speaker
+      ? rawLine.speaker
+      : node?.speaker?.name ?? "Guide";
+
+  const avatarUrl = node?.speaker?.avatarUrl ?? null;
+
+  // Autoplay: advance dialogue every 10s (per line)
+  const autoMS = 10_000;
+
+  const nodeIndexRef = useRef(session?.nodeIndex ?? 0);
+  nodeIndexRef.current = session?.nodeIndex ?? 0;
+
   useEffect(() => {
-    if (!didMount.current) {
-      didMount.current = true;
-    }
-  }, []);
+    if (!lines.length) return;
+
+    const startNodeIndex = nodeIndexRef.current;
+
+    const t = window.setTimeout(() => {
+      if (nodeIndexRef.current !== startNodeIndex) return;
+      dispatch(commands.next());
+    }, autoMS);
+
+    return () => window.clearTimeout(t);
+  }, [dispatch, idx, lines.length]);
+
+  const onNext = () => dispatch(commands.next());
 
   return (
-    <div className="w-full h-full flex flex-col justify-end gap-3 p-6">
-      {/* Speaker */}
-      <div className="text-sm opacity-80">
-        {speakerName}
-      </div>
+    <div className="absolute inset-0 z-20 pointer-events-auto">
+      {/* Subtle background overlay */}
+      <div className="absolute inset-0 bg-black/30" />
 
-      {/* Text */}
-      <div className="text-xl leading-relaxed">
-        {current.text}
-      </div>
+      {/* Bottom dialogue bar */}
+      <div className="absolute left-0 right-0 bottom-0 p-8">
+        <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
+          <div className="flex gap-8 items-end">
+            {/* Speaker sprite */}
+            <div className="shrink-0">
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={speakerName}
+                  className="h-28 w-28 rounded-3xl object-cover ring-1 ring-white/20"
+                />
+              ) : (
+                <DefaultSpeakerSprite />
+              )}
+              <div className="mt-3 text-sm text-white/70 text-center">
+                {speakerName}
+              </div>
+            </div>
 
-      {/* You likely already have your cursor / next button elsewhere;
-          this file only fixes the React child error. */}
+            {/* Dialogue text */}
+            <div className="flex-1 min-w-0">
+              <div
+                className="text-white/95 leading-relaxed"
+                style={{
+                  fontSize: session.settings?.ui?.dialogueFontSize ?? 22,
+                }}
+              >
+                {line || (lines.length ? "…" : "No intro lines provided.")}
+              </div>
+
+              {lines.length > 0 && (
+                <div className="mt-3 text-sm text-white/50">
+                  {Math.min(idx + 1, lines.length)} / {lines.length}
+                </div>
+              )}
+            </div>
+
+            {/* Large hover-friendly button */}
+            <div className="shrink-0 flex flex-col items-end gap-4">
+              <div className="p-4">
+                <button
+                  type="button"
+                  disabled={!showCursor}
+                  onClick={onNext}
+                  className={[
+                    "next-button",
+                    "px-12 py-6 min-w-[220px]",
+                    "rounded-3xl font-semibold text-xl",
+                    "ring-2 ring-white/30",
+                    "transition-all duration-150",
+                    showCursor
+                      ? "bg-white/25 text-white hover:bg-white/35"
+                      : "bg-white/5 text-white/40 cursor-not-allowed",
+                  ].join(" ")}
+                >
+                  Next →
+                </button>
+              </div>
+
+              <div className="text-xs text-white/50">
+                {showCursor ? "Click or hover to continue" : "Please wait…"}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

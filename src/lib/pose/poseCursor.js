@@ -6,19 +6,20 @@ export default function PoseCursor({
   poseDataRef,
   containerWidth,
   containerHeight,
-  onClick,
+  onClick, // used ONLY for pinch / non-button clicks
   sensitivity = 1.2,
   hand = "left", // "left" or "right"
   hoverSelector = ".next-button",
+  hoverThresholdMS = 200,
 }) {
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
   const [isClicking, setIsClicking] = useState(false);
-  const [hoverStartTime, setHoverStartTime] = useState(null);
 
+  // refs so RAF loop uses current values (no stale React state)
+  const hoverStartRef = useRef(null);
+  const hoverElRef = useRef(null);
   const lastClickTime = useRef(0);
-  const hoverElement = useRef(null);
 
-  const HOVER_THRESHOLD = 200;
   const CLICK_COOLDOWN_MS = 600;
 
   useEffect(() => {
@@ -30,8 +31,8 @@ export default function PoseCursor({
       const handLm = poseData?.[handKey];
 
       if (!handLm?.[8]) {
-        setHoverStartTime(null);
-        hoverElement.current = null;
+        hoverStartRef.current = null;
+        hoverElRef.current = null;
         setIsClicking(false);
         rafId = requestAnimationFrame(loop);
         return;
@@ -40,12 +41,11 @@ export default function PoseCursor({
       const indexFinger = handLm[8];
       const palm = handLm[0];
 
-      // Map normalized [0..1] to viewport coordinates
+      // Map normalized [0..1] → viewport coords
       let x = indexFinger.x * containerWidth;
       let y = indexFinger.y * containerHeight;
 
-      // Sensitivity scales movement around center
-      // (Instead of multiplying absolute pos, scale delta from center)
+      // Sensitivity scales delta from center
       const cx = containerWidth / 2;
       const cy = containerHeight / 2;
       x = cx + (x - cx) * sensitivity;
@@ -57,10 +57,8 @@ export default function PoseCursor({
 
       setCursorPos({ x: boundedX, y: boundedY });
 
-      // elementsFromPoint expects viewport coords, which these are (since container = window)
+      // Find element under virtual cursor
       const elementsAtPoint = document.elementsFromPoint(boundedX, boundedY);
-
-      // Find hover target
       const hoverTarget = elementsAtPoint.find((el) => {
         try {
           return el.matches?.(hoverSelector);
@@ -69,30 +67,39 @@ export default function PoseCursor({
         }
       });
 
+      // ✅ Hover-to-click: ONLY click the element (do NOT also call onClick)
       if (hoverTarget) {
-        if (!hoverStartTime) {
-          setHoverStartTime(Date.now());
-          hoverElement.current = hoverTarget;
-        } else if (
-          hoverElement.current === hoverTarget &&
-          Date.now() - hoverStartTime >= HOVER_THRESHOLD
-        ) {
-          const now = Date.now();
-          if (now - lastClickTime.current > CLICK_COOLDOWN_MS) {
-            setIsClicking(true);
-            lastClickTime.current = now;
-            onClick?.(boundedX, boundedY);
-            setHoverStartTime(null);
-            hoverElement.current = null;
+        const nowPerf = performance.now();
+
+        if (hoverElRef.current !== hoverTarget) {
+          hoverElRef.current = hoverTarget;
+          hoverStartRef.current = nowPerf;
+        } else {
+          const started = hoverStartRef.current ?? nowPerf;
+
+          if (nowPerf - started >= hoverThresholdMS) {
+            const now = Date.now();
+
+            if (now - lastClickTime.current > CLICK_COOLDOWN_MS) {
+              setIsClicking(true);
+              lastClickTime.current = now;
+
+              // Real DOM click so React button onClick runs once
+              hoverTarget.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+              // reset hover tracking
+              hoverStartRef.current = null;
+              hoverElRef.current = null;
+            }
           }
         }
       } else {
-        setHoverStartTime(null);
-        hoverElement.current = null;
+        hoverStartRef.current = null;
+        hoverElRef.current = null;
         setIsClicking(false);
       }
 
-      // Optional "pinch click": index to palm distance in normalized coords
+      // ✅ Pinch click: if hovering a target, click it; else call onClick
       if (palm) {
         const dx = indexFinger.x - palm.x;
         const dy = indexFinger.y - palm.y;
@@ -101,10 +108,20 @@ export default function PoseCursor({
         // tweak threshold based on your data
         if (distance < 0.12) {
           const now = Date.now();
+
           if (now - lastClickTime.current > CLICK_COOLDOWN_MS) {
             setIsClicking(true);
             lastClickTime.current = now;
-            onClick?.(boundedX, boundedY);
+
+            if (hoverTarget) {
+              hoverTarget.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            } else {
+              onClick?.(boundedX, boundedY);
+            }
+
+            // prevent immediate re-trigger on the same element
+            hoverStartRef.current = null;
+            hoverElRef.current = null;
           }
         }
       }
@@ -120,12 +137,24 @@ export default function PoseCursor({
 
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
-    // hoverStartTime and isClicking intentionally omitted to avoid restarting RAF
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poseDataRef, containerWidth, containerHeight, onClick, sensitivity, hand, hoverSelector]);
+  }, [
+    poseDataRef,
+    containerWidth,
+    containerHeight,
+    onClick,
+    sensitivity,
+    hand,
+    hoverSelector,
+    hoverThresholdMS,
+  ]);
 
-  const hoverProgress =
-    hoverStartTime ? Math.min(1, (Date.now() - hoverStartTime) / HOVER_THRESHOLD) : 0;
+  // purely cosmetic: orange pulse when “arming” hover
+  const hoverProgress = (() => {
+    if (!hoverStartRef.current) return 0;
+    const elapsed = performance.now() - hoverStartRef.current;
+    return Math.min(1, elapsed / hoverThresholdMS);
+  })();
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[1000]">
@@ -140,7 +169,7 @@ export default function PoseCursor({
           borderRadius: "50%",
           backgroundColor: isClicking
             ? "rgba(255, 0, 0, 0.6)"
-            : hoverStartTime
+            : hoverElRef.current
             ? `rgba(255, 165, 0, ${hoverProgress})`
             : "rgba(255, 255, 255, 0.6)",
           border: "3px solid white",
