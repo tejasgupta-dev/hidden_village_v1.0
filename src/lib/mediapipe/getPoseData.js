@@ -3,25 +3,77 @@
 import { useEffect, useRef, useState } from "react";
 import { enrichLandmarks } from "@/lib/pose/landmark";
 
-const GetPoseData = ({ width, height, onPoseData }) => {
+/**
+ * Starts MediaPipe Holistic using an explicit videoRef (no DOM querying).
+ * This eliminates the "works only after reload" race.
+ *
+ * Usage:
+ * const videoRef = useRef(null);
+ * const { loading, error } = getPoseData({ videoRef, width, height, onPoseData });
+ */
+export default function getPoseData({ videoRef, width, height, onPoseData }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const cameraRef = useRef(null);
   const holisticRef = useRef(null);
 
+  const onPoseDataRef = useRef(onPoseData);
+  useEffect(() => {
+    onPoseDataRef.current = onPoseData;
+  }, [onPoseData]);
+
+  const loadingRef = useRef(true);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
   useEffect(() => {
     let isCleanedUp = false;
 
-    const initializeMediaPipe = async () => {
+    const stopVideoStreamTracks = () => {
+      const videoEl = videoRef?.current;
+      if (!videoEl) return;
+
+      const stream = videoEl.srcObject;
+      if (stream && typeof stream.getTracks === "function") {
+        try {
+          stream.getTracks().forEach((t) => {
+            try {
+              t.stop();
+            } catch {}
+          });
+        } catch {}
+      }
+
       try {
-        // Wait a bit for DOM to be ready
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        videoEl.pause?.();
+      } catch {}
+      try {
+        videoEl.srcObject = null;
+      } catch {}
+      try {
+        videoEl.removeAttribute?.("src");
+        videoEl.load?.();
+      } catch {}
+    };
 
-        const videoElement = document.getElementsByClassName("input-video")[0];
+    const initialize = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        loadingRef.current = true;
 
+        const videoEl = videoRef?.current;
+        if (!videoEl) {
+          // If the ref isn't ready yet, try again on the next tick
+          // (this is the main fix for route-transition timing)
+          await new Promise((r) => setTimeout(r, 0));
+        }
+
+        const videoElement = videoRef?.current;
         if (!videoElement) {
-          setError("Video element not found");
+          setError("Video ref not ready");
           setLoading(false);
           return;
         }
@@ -51,25 +103,21 @@ const GetPoseData = ({ width, height, onPoseData }) => {
 
         holistic.onResults((results) => {
           if (isCleanedUp) return;
-
-          // IMPORTANT: Holistic can fire without poseLandmarks early on
           if (!results) return;
 
           const enriched = enrichLandmarks(results);
+          onPoseDataRef.current?.(enriched);
 
-          // ✅ This is what your GamePlayerRoot needs:
-          onPoseData?.(enriched);
-
-          // ✅ Stop loading as soon as we get *any* results
-          // (not only when poseLandmarks exist)
-          if (loading) setLoading(false);
+          if (loadingRef.current) {
+            loadingRef.current = false;
+            setLoading(false);
+          }
         });
 
         const camera = new Camera(videoElement, {
           onFrame: async () => {
             if (isCleanedUp) return;
 
-            // Optional guard: wait until video has a frame
             if (videoElement.readyState < 2) return;
 
             try {
@@ -95,7 +143,7 @@ const GetPoseData = ({ width, height, onPoseData }) => {
       }
     };
 
-    initializeMediaPipe();
+    initialize();
 
     return () => {
       isCleanedUp = true;
@@ -109,11 +157,10 @@ const GetPoseData = ({ width, height, onPoseData }) => {
 
       cameraRef.current = null;
       holisticRef.current = null;
+
+      stopVideoStreamTracks();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [width, height]);
+  }, [videoRef, width, height]);
 
   return { loading, error };
-};
-
-export default GetPoseData;
+}

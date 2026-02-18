@@ -33,22 +33,8 @@ function usePoseDrawerPose(poseDataRef) {
   return poseForDrawer;
 }
 
-function getOrCreateClientPlayId(storageKey) {
-  try {
-    const existing = sessionStorage.getItem(storageKey);
-    if (existing) return existing;
-
-    const id =
-      (typeof crypto !== "undefined" && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : `play_${Math.random().toString(16).slice(2)}_${Date.now()}`;
-
-    sessionStorage.setItem(storageKey, id);
-    return id;
-  } catch {
-    // If sessionStorage is blocked, still generate a stable-ish id for this mount.
-    return `play_${Math.random().toString(16).slice(2)}_${Date.now()}`;
-  }
+async function sleep(ms) {
+  await new Promise((r) => setTimeout(r, ms));
 }
 
 export default function GamePlayerRoot({
@@ -59,63 +45,108 @@ export default function GamePlayerRoot({
 }) {
   const { width, height } = useWindowSize(640, 480);
 
+  const gameId = game?.id ?? null;
+  const levelId = game?.levels?.[levelIndex]?.id ?? null;
+
   const [playId, setPlayId] = useState(null);
   const [creatingPlay, setCreatingPlay] = useState(false);
+  const [createError, setCreateError] = useState(null);
 
-  // Guard against StrictMode double-invoking effects in dev
+  // Prevent accidental double create in dev StrictMode
   const createdOnceRef = useRef(false);
 
-  // Create play session on mount (idempotent via clientPlayId)
+  const createPlay = useCallback(async () => {
+    if (!gameId || !levelId) return;
+
+    setCreatingPlay(true);
+    setCreateError(null);
+
+    // Retry helps when auth/session cookies aren't ready yet right after navigation
+    const maxAttempts = 6;
+
+    try {
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const res = await fetch("/api/plays", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            gameId,
+            levelId,
+            deviceId,
+          }),
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          setPlayId(json.playId);
+          setCreatingPlay(false);
+          return;
+        }
+
+        const text = await res.text().catch(() => "");
+        const msg = `Failed to create play (${res.status}): ${text}`;
+
+        // Auth/session races: retry
+        if ((res.status === 401 || res.status === 403) && attempt < maxAttempts) {
+          await sleep(250 * attempt);
+          continue;
+        }
+
+        throw new Error(msg);
+      }
+    } catch (e) {
+      setCreateError(e?.message ?? String(e));
+      setCreatingPlay(false);
+    }
+  }, [gameId, levelId, deviceId]);
+
+  // Create play on mount (once), only after levelId exists
   useEffect(() => {
-    if (!game?.id) return;
+    if (!gameId || !levelId) return;
+    if (playId) return;
+
     if (createdOnceRef.current) return;
     createdOnceRef.current = true;
 
-    let cancelled = false;
+    void createPlay();
+  }, [gameId, levelId, playId, createPlay]);
 
-    async function createPlay() {
-      setCreatingPlay(true);
-
-      const levelId = game?.levels?.[levelIndex]?.id ?? null;
-      const storageKey = `clientPlayId:${game.id}:${levelId}:${deviceId}`;
-      const clientPlayId = getOrCreateClientPlayId(storageKey);
-
-      const res = await fetch("/api/plays", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gameId: game.id,
-          levelId,
-          deviceId,
-          clientPlayId, // ✅ makes play creation idempotent
-        }),
-      });
-
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`Failed to create play (${res.status}): ${txt}`);
-      }
-
-      const json = await res.json();
-
-      if (!cancelled) setPlayId(json.playId);
-      setCreatingPlay(false);
-    }
-
-    void createPlay().catch((e) => {
-      console.error(e);
-      setCreatingPlay(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [game?.id, game, levelIndex, deviceId]);
+  if (!gameId || !levelId) {
+    return (
+      <div className="w-full h-screen bg-gray-950 text-white flex items-center justify-center">
+        Preparing level…
+      </div>
+    );
+  }
 
   if (!playId) {
     return (
-      <div className="w-full h-screen bg-gray-950 text-white flex items-center justify-center">
-        {creatingPlay ? "Creating play…" : "Preparing…"}
+      <div className="w-full h-screen bg-gray-950 text-white flex flex-col items-center justify-center gap-4 px-6 text-center">
+        <div className="text-lg">{creatingPlay ? "Creating play…" : "Preparing…"}</div>
+
+        {createError ? (
+          <div className="max-w-xl text-sm text-red-200 bg-red-900/30 ring-1 ring-red-500/30 rounded-xl p-3">
+            {createError}
+          </div>
+        ) : (
+          <div className="text-sm text-white/60">
+            Waiting for session + creating play…
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => {
+            // Allow manual retry even if StrictMode guard tripped earlier
+            createdOnceRef.current = true;
+            void createPlay();
+          }}
+          className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 ring-1 ring-white/20"
+          disabled={creatingPlay}
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -151,7 +182,7 @@ function GamePlayerInner({
   // Required hidden video element for getPoseData
   const videoRef = useRef(null);
 
-  // Telemetry bus (buffered) — now guaranteed to use real playId
+  // Telemetry bus — guaranteed to use the real playId
   useEffect(() => {
     const bus = createTelemetryBus({ playId });
     telemetryRef.current = bus;
@@ -164,7 +195,7 @@ function GamePlayerInner({
     };
   }, [playId]);
 
-  // Session reducer init — now uses real playId, so SESSION_START will be correct
+  // Session reducer init uses real playId (so SESSION_START is correct)
   const initialSession = useMemo(() => {
     return createInitialSession({ game, initialLevel: levelIndex, playId });
   }, [game, levelIndex, playId]);
@@ -177,6 +208,7 @@ function GamePlayerInner({
   }, []);
 
   const { loading, error } = getPoseData({
+    videoRef,
     width: 640,
     height: 480,
     onPoseData: handlePoseData,
@@ -257,7 +289,7 @@ function GamePlayerInner({
   const level = game.levels?.[levelIndex];
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
 
-  // live pose for the drawer (updated with RAF)
+  // live pose for the drawer
   const poseForDrawer = usePoseDrawerPose(poseDataRef);
 
   // Layout sizes
@@ -354,7 +386,7 @@ function GamePlayerInner({
         sensitivity={session.settings?.cursor?.sensitivity ?? 1.5}
       />
 
-      {/* Loading overlay */}
+      {/* Loading overlay for pose */}
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center text-white bg-black/40 z-[60]">
           {error ? `Error: ${String(error)}` : "Loading pose detection..."}
