@@ -9,8 +9,8 @@ export async function POST(req, { params }) {
   const { success, response, user } = await requireSession(req);
   if (!success) return response;
 
-  const playId = params?.id;
-  if (!playId) {
+  const { id } = await params;
+  if (!id) {
     return NextResponse.json(
       { success: false, message: "Missing play id" },
       { status: 400 }
@@ -19,7 +19,7 @@ export async function POST(req, { params }) {
 
   const uid = user.uid;
 
-  const isOwner = await requirePlayOwner(playId, uid);
+  const isOwner = await requirePlayOwner(id, uid);
   if (!isOwner) {
     return NextResponse.json(
       { success: false, message: "Forbidden" },
@@ -38,7 +38,7 @@ export async function POST(req, { params }) {
   }
 
   // Load play metadata (Admin DB)
-  const metaSnap = await db.ref(`plays/${playId}/metadata`).once("value");
+  const metaSnap = await db.ref(`plays/${id}/metadata`).once("value");
   if (!metaSnap.exists()) {
     return NextResponse.json(
       { success: false, message: "Play metadata not found" },
@@ -71,7 +71,7 @@ export async function POST(req, { params }) {
     expires: Date.now() + 1000 * 60 * 60 * 24 * 365, // 1 year
   });
 
-  await db.ref(`plays/${playId}/media`).set({
+  await db.ref(`plays/${id}/media`).set({
     videoUrl: url,
     storagePath,
     uploadedAt: Date.now(),

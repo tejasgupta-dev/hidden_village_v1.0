@@ -8,7 +8,6 @@
 
 export const STATE_TYPES = Object.freeze({
   INTRO: "intro",
-  DIALOGUE: "dialogue",
   TWEEN: "tween",
   POSE_MATCH: "poseMatch",
   INSIGHT: "insight",

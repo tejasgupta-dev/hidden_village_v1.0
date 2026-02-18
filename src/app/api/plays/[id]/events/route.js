@@ -9,15 +9,15 @@ export async function POST(req, { params }) {
   const { success, response, user } = await requireSession(req);
   if (!success) return response;
 
-  const playId = params?.id;
-  if (!playId) {
+  const { id } = await params;
+  if (!id) {
     return NextResponse.json(
       { success: false, message: "Missing play id" },
       { status: 400 }
     );
   }
 
-  const isOwner = await requirePlayOwner(playId, user.uid);
+  const isOwner = await requirePlayOwner(id, user.uid);
   if (!isOwner) {
     return NextResponse.json(
       { success: false, message: "Forbidden" },
@@ -31,12 +31,12 @@ export async function POST(req, { params }) {
   const events = Array.isArray(body.events) ? body.events : null;
 
   if (events) {
-    const baseRef = db.ref(`plays/${playId}/eventData`);
+    const baseRef = db.ref(`plays/${id}/eventData`);
     const updates = {};
 
     for (const evt of events) {
       const key = baseRef.push().key;
-      updates[`plays/${playId}/eventData/${key}`] = {
+      updates[`plays/${id}/eventData/${key}`] = {
         ...evt,
         createdAt: Date.now(),
       };
@@ -48,7 +48,7 @@ export async function POST(req, { params }) {
   }
 
   // ✅ Or accept single event object (legacy)
-  const eventRef = db.ref(`plays/${playId}/eventData`).push();
+  const eventRef = db.ref(`plays/${id}/eventData`).push();
   await eventRef.set({
     ...body,
     createdAt: Date.now(),

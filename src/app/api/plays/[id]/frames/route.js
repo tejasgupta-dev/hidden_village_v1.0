@@ -9,15 +9,15 @@ export async function POST(req, { params }) {
   const { success, response, user } = await requireSession(req);
   if (!success) return response;
 
-  const playId = params?.id;
-  if (!playId) {
+  const { id } = await params;
+  if (!id) {
     return NextResponse.json(
       { success: false, message: "Missing play id" },
       { status: 400 }
     );
   }
 
-  const isOwner = await requirePlayOwner(playId, user.uid);
+  const isOwner = await requirePlayOwner(id, user.uid);
   if (!isOwner) {
     return NextResponse.json(
       { success: false, message: "Forbidden" },
@@ -37,7 +37,7 @@ export async function POST(req, { params }) {
 
   const updates = {};
   for (let i = 0; i < frames.length; i++) {
-    updates[`plays/${playId}/poseData/${startIndex + i}`] = {
+    updates[`plays/${id}/poseData/${startIndex + i}`] = {
       ...frames[i],
       createdAt: Date.now(),
     };
