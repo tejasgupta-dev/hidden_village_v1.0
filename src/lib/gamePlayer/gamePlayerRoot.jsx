@@ -362,27 +362,6 @@ function GamePlayerInner({
         {/* LEFT */}
         <div className="relative h-full" style={{ width: leftPanelWidth }}>
           <StateRenderer session={session} dispatch={dispatch} poseDataRef={poseDataRef} />
-
-          {isDialogueLike(type) && (
-            <div className="absolute bottom-0 left-0 right-0 z-50 bg-black/70 text-white p-6">
-              {speaker ? <div className="text-sm text-gray-300 mb-2">{speaker}</div> : null}
-
-              <div
-                className="text-lg"
-                style={{ fontSize: session.settings?.ui?.dialogueFontSize ?? 20 }}
-              >
-                {dialogueText}
-              </div>
-
-              {session.flags?.showCursor && (
-                <div className="mt-4 text-right">
-                  <span className="inline-block px-3 py-1 rounded bg-white/10">
-                    Click to continue →
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* RIGHT */}
