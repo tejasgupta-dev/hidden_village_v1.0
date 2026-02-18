@@ -1,11 +1,11 @@
 "use client";
 
 import { normalizeStateType, STATE_TYPES } from "@/lib/gamePlayer/states/_shared/stateTypes";
-import IntroView from "./states/intro/View";
-import TweenView from "./states/tween/View";
-import PoseMatchView from "./states/poseMatch/View";
-import InsightView from "./states/insight/View";
-import OutroView from "./states/outro/View";
+import IntroView from "./states/Views/IntroView";
+import TweenView from "./states/Views/TweenView";
+import PoseMatchView from "./states/Views/PoseMatchView";
+import InsightView from "./states/Views/InsightView";
+import OutroView from "./states/Views/OutroView";
 
 export default function StateRenderer({ session, dispatch, poseDataRef }) {
   const node = session?.node;

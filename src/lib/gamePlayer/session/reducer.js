@@ -17,7 +17,7 @@ function nodeType(node) {
 }
 
 function isDialogueLikeType(t) {
-  return t === STATE_TYPES.DIALOGUE || t === STATE_TYPES.INTRO || t === STATE_TYPES.OUTRO;
+  return t === STATE_TYPES.INTRO || t === STATE_TYPES.OUTRO;
 }
 
 export function createInitialSession({ game, initialLevel = 0, playId = null }) {
