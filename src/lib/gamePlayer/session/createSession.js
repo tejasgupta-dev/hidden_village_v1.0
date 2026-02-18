@@ -1,5 +1,7 @@
 "use client";
 
+import { buildStateNodesForLevel } from "./buildStateNodesForLevel";
+
 const DEFAULT_FLAGS = {
   paused: false,
   showCursor: true,
@@ -22,21 +24,24 @@ const DEFAULT_SETTINGS = {
   },
 };
 
-/**
- * Creates the initial session object for a given game and level.
- *
- * Expected (flexible) game format:
- * - game.id
- * - game.levels[levelIndex]
- * - level.id
- * - level.settings (optional)
- * - level.stateNodes OR level.states OR (fallback) level.dialogues
- *
- * State node examples:
- * - { type: "dialogue", lines: [...], speaker: "..." }
- * - { type: "tween", durationMS: 1000, ... }
- * - { type: "poseMatch", targetPoseId: "...", threshold: 0.85 }
- */
+function unwrapDoc(maybeDoc) {
+  if (!maybeDoc) return { id: null, data: null };
+
+  if (typeof maybeDoc?.data === "function") {
+    return { id: maybeDoc?.id ?? null, data: maybeDoc.data() ?? null };
+  }
+
+  if (
+    maybeDoc?.data &&
+    typeof maybeDoc.data === "object" &&
+    !Array.isArray(maybeDoc.data)
+  ) {
+    return { id: maybeDoc?.id ?? null, data: maybeDoc.data };
+  }
+
+  return { id: maybeDoc?.id ?? null, data: maybeDoc };
+}
+
 export function createSession({
   game,
   playId = null,
@@ -48,36 +53,49 @@ export function createSession({
   }
 
   const levels = Array.isArray(game.levels) ? game.levels : [];
+  const storyline = Array.isArray(game.storyline) ? game.storyline : [];
+
   const levelIndex =
     typeof initialLevel === "number" && initialLevel >= 0 ? initialLevel : 0;
 
-  const level = levels[levelIndex];
-  if (!level) {
+  const levelRaw = levels[levelIndex];
+  if (!levelRaw) {
     throw new Error(`createSession: level not found at index ${levelIndex}`);
   }
 
-  const levelSettings = level.settings ?? {};
-  const settings = mergeSettings(DEFAULT_SETTINGS, levelSettings);
+  // Important: level might be a Firestore doc or plain object
+  const { data: levelObj } = unwrapDoc(levelRaw);
 
-  // Support multiple naming conventions to ease migration
+  const settings = mergeSettings(DEFAULT_SETTINGS, levelObj?.settings ?? {});
+
+  // Story for this level index (intro/outro)
+  const storyRaw = storyline[levelIndex] ?? null;
+
+  // Prefer explicit authored nodes if you ever add them later (on level)
   let levelStateNodes =
-    level.stateNodes ??
-    level.states ??
-    level.nodes ??
+    levelObj?.stateNodes ??
+    levelObj?.states ??
+    levelObj?.nodes ??
     null;
 
-  // If older format: "dialogues" array exists but no nodes, wrap into a single dialogue node.
-  if (!levelStateNodes) {
-    if (Array.isArray(level.dialogues) && level.dialogues.length > 0) {
-      levelStateNodes = [
-        { type: "dialogue", lines: level.dialogues, speaker: level.speaker ?? null },
-      ];
-    } else {
-      levelStateNodes = [];
-    }
+  if (!Array.isArray(levelStateNodes) || levelStateNodes.length === 0) {
+    levelStateNodes = buildStateNodesForLevel({
+      level: levelRaw, // pass raw, builder can unwrap
+      story: storyRaw, // raw story node (plain or doc)
+    });
   }
 
   if (!Array.isArray(levelStateNodes)) levelStateNodes = [];
+
+  // No defaults: if builder produced nothing, fail loudly with a helpful message
+  if (levelStateNodes.length === 0) {
+    const lvlId = levelObj?.id ?? unwrapDoc(levelRaw).id ?? "(missing id)";
+    throw new Error(
+      `No playable states for level ${lvlId}. ` +
+        `Expected: game.storyline[${levelIndex}] to include intro/outro dialogues ` +
+        `and/or game.levels[${levelIndex}].poses to include poses.`
+    );
+  }
 
   const nodeIndex =
     typeof initialNodeIndex === "number" && initialNodeIndex >= 0
@@ -87,26 +105,22 @@ export function createSession({
   const now =
     typeof performance !== "undefined" ? performance.now() : Date.now();
 
-  const session = {
+  return {
     version: 1,
 
     playId,
     gameId: game.id ?? null,
-    levelId: level.id ?? null,
+    levelId: levelObj?.id ?? unwrapDoc(levelRaw).id ?? null,
 
-    // keep original game data available (root can use for sprites/background)
     game,
     levelIndex,
 
-    // runtime node list
     levelStateNodes,
     nodeIndex,
     node: levelStateNodes[nodeIndex] ?? null,
 
-    // dialogue runtime
     dialogueIndex: 0,
 
-    // time bookkeeping
     time: {
       startedAt: now,
       now,
@@ -114,26 +128,17 @@ export function createSession({
       dt: 0,
     },
 
-    // UI + gameplay flags
     flags: { ...DEFAULT_FLAGS },
-
-    // merged settings
     settings,
 
-    // tick-driven timers (no setTimeout needed)
     timers: [],
-
-    // side effects (telemetry, pose start/stop, etc.)
     effects: [],
   };
-
-  return session;
 }
 
 /* ---------------------------- helpers ---------------------------- */
 
 function mergeSettings(defaults, overrides) {
-  // Only merges known subtrees (cursor/pose/ui) shallowly for safety.
   const o = overrides ?? {};
   return {
     ...defaults,

@@ -5,6 +5,7 @@ import IntroView from "./states/intro/View";
 import TweenView from "./states/tween/View";
 import PoseMatchView from "./states/poseMatch/View";
 import InsightView from "./states/insight/View";
+import OutroView from "./states/outro/View";
 
 export default function StateRenderer({ session, dispatch, poseDataRef }) {
   const node = session?.node;
@@ -22,6 +23,9 @@ export default function StateRenderer({ session, dispatch, poseDataRef }) {
 
     case STATE_TYPES.INSIGHT:
       return <InsightView node={node} dispatch={dispatch} poseDataRef={poseDataRef} />;
+
+    case STATE_TYPES.OUTRO:
+      return <OutroView node={node} dispatch={dispatch} poseDataRef={poseDataRef} />;  
 
     default:
       return null;
