@@ -6,7 +6,7 @@ export default function PoseCursor({
   poseDataRef,
   containerWidth,
   containerHeight,
-  onClick, // used ONLY for pinch / non-button clicks
+  // onClick is intentionally unused now: we only click the hovered DOM button
   sensitivity = 1.2,
   hand = "left", // "left" or "right"
   hoverSelector = ".next-button",
@@ -15,7 +15,6 @@ export default function PoseCursor({
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
   const [isClicking, setIsClicking] = useState(false);
 
-  // refs so RAF loop uses current values (no stale React state)
   const hoverStartRef = useRef(null);
   const hoverElRef = useRef(null);
   const lastClickTime = useRef(0);
@@ -30,6 +29,7 @@ export default function PoseCursor({
       const handKey = hand === "right" ? "rightHandLandmarks" : "leftHandLandmarks";
       const handLm = poseData?.[handKey];
 
+      // If no hand, stop hover tracking (no click)
       if (!handLm?.[8]) {
         hoverStartRef.current = null;
         hoverElRef.current = null;
@@ -39,7 +39,6 @@ export default function PoseCursor({
       }
 
       const indexFinger = handLm[8];
-      const palm = handLm[0];
 
       // Map normalized [0..1] → viewport coords
       let x = indexFinger.x * containerWidth;
@@ -59,18 +58,29 @@ export default function PoseCursor({
 
       // Find element under virtual cursor
       const elementsAtPoint = document.elementsFromPoint(boundedX, boundedY);
+
       const hoverTarget = elementsAtPoint.find((el) => {
         try {
-          return el.matches?.(hoverSelector);
+          if (!el.matches?.(hoverSelector)) return false;
+
+          // ignore disabled buttons
+          const isDisabled =
+            // native disabled
+            (typeof el.disabled === "boolean" && el.disabled) ||
+            // aria disabled
+            el.getAttribute?.("aria-disabled") === "true";
+
+          return !isDisabled;
         } catch {
           return false;
         }
       });
 
-      // ✅ Hover-to-click: ONLY click the element (do NOT also call onClick)
+      // ✅ ONLY hover-to-click the actual button
       if (hoverTarget) {
         const nowPerf = performance.now();
 
+        // new target: start timer
         if (hoverElRef.current !== hoverTarget) {
           hoverElRef.current = hoverTarget;
           hoverStartRef.current = nowPerf;
@@ -80,50 +90,25 @@ export default function PoseCursor({
           if (nowPerf - started >= hoverThresholdMS) {
             const now = Date.now();
 
+            // cooldown so jitter doesn't spam clicks
             if (now - lastClickTime.current > CLICK_COOLDOWN_MS) {
               setIsClicking(true);
               lastClickTime.current = now;
 
-              // Real DOM click so React button onClick runs once
+              // ✅ real DOM click so React onClick runs (exactly once)
               hoverTarget.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-              // reset hover tracking
+              // reset hover tracking after a click
               hoverStartRef.current = null;
               hoverElRef.current = null;
             }
           }
         }
       } else {
+        // not hovering a valid target → no click, reset timer
         hoverStartRef.current = null;
         hoverElRef.current = null;
         setIsClicking(false);
-      }
-
-      // ✅ Pinch click: if hovering a target, click it; else call onClick
-      if (palm) {
-        const dx = indexFinger.x - palm.x;
-        const dy = indexFinger.y - palm.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        // tweak threshold based on your data
-        if (distance < 0.12) {
-          const now = Date.now();
-
-          if (now - lastClickTime.current > CLICK_COOLDOWN_MS) {
-            setIsClicking(true);
-            lastClickTime.current = now;
-
-            if (hoverTarget) {
-              hoverTarget.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-            } else {
-              onClick?.(boundedX, boundedY);
-            }
-
-            // prevent immediate re-trigger on the same element
-            hoverStartRef.current = null;
-            hoverElRef.current = null;
-          }
-        }
       }
 
       // reset click highlight shortly after
@@ -142,14 +127,13 @@ export default function PoseCursor({
     poseDataRef,
     containerWidth,
     containerHeight,
-    onClick,
     sensitivity,
     hand,
     hoverSelector,
     hoverThresholdMS,
   ]);
 
-  // purely cosmetic: orange pulse when “arming” hover
+  // cosmetic hover progress
   const hoverProgress = (() => {
     if (!hoverStartRef.current) return 0;
     const elapsed = performance.now() - hoverStartRef.current;

@@ -266,7 +266,6 @@ function GamePlayerInner({
           }
         }
 
-        // ✅ Fix payload shape: do not spread whole evt into payload
         const { type, at, ...payload } = evt || {};
         bus.emitEvent(type, { ...payload, playId }, at ?? Date.now());
       }
@@ -295,20 +294,6 @@ function GamePlayerInner({
 
     dispatch(commands.consumeEffects());
   }, [session.effects, session.levelId, session.gameId, onComplete, playId, dispatch]);
-
-  // PoseCursor click → NEXT
-  const handleCursorClick = useCallback(() => {
-    const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
-    if (isDialogueLike(type) && !session.flags?.showCursor) return;
-
-    telemetryRef.current?.emitEvent("CURSOR_CLICK", {
-      playId,
-      nodeIndex: session.nodeIndex,
-      stateType: type,
-    });
-
-    dispatch(commands.next());
-  }, [session, playId]);
 
   const level = game.levels?.[levelIndex];
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
@@ -347,7 +332,6 @@ function GamePlayerInner({
       {/* Background */}
       <div className="absolute inset-0">
         {level?.background ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={level.background}
             alt=""
@@ -389,7 +373,6 @@ function GamePlayerInner({
         poseDataRef={poseDataRef}
         containerWidth={width}
         containerHeight={height}
-        onClick={handleCursorClick}
         sensitivity={session.settings?.cursor?.sensitivity ?? 1.5}
       />
 
