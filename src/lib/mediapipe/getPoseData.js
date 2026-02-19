@@ -1,32 +1,79 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { enrichLandmarks } from "@/lib/pose/landmark";
 
-const GetPoseData = ({ width, height }) => {
+/**
+ * Starts MediaPipe Holistic using an explicit videoRef (no DOM querying).
+ * This eliminates the "works only after reload" race.
+ *
+ * Usage:
+ * const videoRef = useRef(null);
+ * const { loading, error } = getPoseData({ videoRef, width, height, onPoseData });
+ */
+export default function getPoseData({ videoRef, width, height, onPoseData }) {
   const [loading, setLoading] = useState(true);
-  const [poseData, setPoseData] = useState(null);
   const [error, setError] = useState(null);
-  
-  // Use refs to avoid recreating functions
+
   const cameraRef = useRef(null);
   const holisticRef = useRef(null);
 
+  const onPoseDataRef = useRef(onPoseData);
   useEffect(() => {
-    let camera;
-    let holistic;
+    onPoseDataRef.current = onPoseData;
+  }, [onPoseData]);
+
+  const loadingRef = useRef(true);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
     let isCleanedUp = false;
 
-    const initializeMediaPipe = async () => {
-      try {
-        // Wait a bit for DOM to be ready
-        await new Promise(resolve => setTimeout(resolve, 100));
+    const stopVideoStreamTracks = () => {
+      const videoEl = videoRef?.current;
+      if (!videoEl) return;
 
-        const videoElement = document.getElementsByClassName("input-video")[0];
-        
+      const stream = videoEl.srcObject;
+      if (stream && typeof stream.getTracks === "function") {
+        try {
+          stream.getTracks().forEach((t) => {
+            try {
+              t.stop();
+            } catch {}
+          });
+        } catch {}
+      }
+
+      try {
+        videoEl.pause?.();
+      } catch {}
+      try {
+        videoEl.srcObject = null;
+      } catch {}
+      try {
+        videoEl.removeAttribute?.("src");
+        videoEl.load?.();
+      } catch {}
+    };
+
+    const initialize = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        loadingRef.current = true;
+
+        const videoEl = videoRef?.current;
+        if (!videoEl) {
+          // If the ref isn't ready yet, try again on the next tick
+          // (this is the main fix for route-transition timing)
+          await new Promise((r) => setTimeout(r, 0));
+        }
+
+        const videoElement = videoRef?.current;
         if (!videoElement) {
-          console.error("Video element not found");
-          setError("Video element not found");
+          setError("Video ref not ready");
           setLoading(false);
           return;
         }
@@ -38,8 +85,8 @@ const GetPoseData = ({ width, height }) => {
         const Camera = cameraUtils.Camera;
         const Holistic = holisticModule.Holistic;
 
-        holistic = new Holistic({
-          locateFile: (file) => 
+        const holistic = new Holistic({
+          locateFile: (file) =>
             `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
         });
 
@@ -54,84 +101,66 @@ const GetPoseData = ({ width, height }) => {
           refineFaceLandmarks: true,
         });
 
-        // Update pose results callback - using a stable function
-        const updatePoseResults = (newResults) => {
+        holistic.onResults((results) => {
           if (isCleanedUp) return;
-          
-          // Only update if we have valid landmarks
-          if (newResults && newResults.poseLandmarks) {
-            const enriched = enrichLandmarks(newResults);
-            setPoseData(enriched);
-            
-            if (loading) {
-              setLoading(false);
-            }
+          if (!results) return;
+
+          const enriched = enrichLandmarks(results);
+          onPoseDataRef.current?.(enriched);
+
+          if (loadingRef.current) {
+            loadingRef.current = false;
+            setLoading(false);
           }
-        };
+        });
 
-        holistic.onResults(updatePoseResults);
+        const camera = new Camera(videoElement, {
+          onFrame: async () => {
+            if (isCleanedUp) return;
 
-        const poseDetectionFrame = async () => {
-          if (isCleanedUp) return;
-          
-          try {
-            await holistic.send({ image: videoElement });
-          } catch (err) {
-            if (!isCleanedUp) {
-              console.error("Error in pose detection frame:", err);
+            if (videoElement.readyState < 2) return;
+
+            try {
+              await holistic.send({ image: videoElement });
+            } catch {
+              // ignore shutdown races
             }
-          }
-        };
-
-        camera = new Camera(videoElement, {
-          onFrame: poseDetectionFrame,
-          width: width,
-          height: height,
+          },
+          width,
+          height,
           facingMode: "user",
         });
 
-        // Store refs
         cameraRef.current = camera;
         holisticRef.current = holistic;
-        
+
         await camera.start();
       } catch (err) {
         if (!isCleanedUp) {
-          console.error("Error initializing MediaPipe:", err);
-          setError(err.message);
+          setError(err?.message ?? String(err));
           setLoading(false);
         }
       }
     };
 
-    initializeMediaPipe();
+    initialize();
 
-    // Cleanup function
     return () => {
       isCleanedUp = true;
-      
-      if (cameraRef.current) {
-        try {
-          cameraRef.current.stop();
-        } catch (err) {
-          console.error("Error stopping camera:", err);
-        }
-      }
-      
-      if (holisticRef.current) {
-        try {
-          holisticRef.current.close();
-        } catch (err) {
-          console.error("Error closing holistic:", err);
-        }
-      }
-      
+
+      try {
+        cameraRef.current?.stop?.();
+      } catch {}
+      try {
+        holisticRef.current?.close?.();
+      } catch {}
+
       cameraRef.current = null;
       holisticRef.current = null;
+
+      stopVideoStreamTracks();
     };
-  }, [width, height]); // Only re-run if width or height changes
+  }, [videoRef, width, height]);
 
-  return { poseData, loading, error };
-};
-
-export default GetPoseData;
+  return { loading, error };
+}

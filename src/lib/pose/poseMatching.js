@@ -1,9 +1,7 @@
-"use client";
-
-import PoseDrawer from "@/lib/pose/poseDrawer";
+import PoseDrawer from "./poseDrawer";
 import { useState, useEffect, useMemo } from "react";
-import { matchSegmentToLandmarks, segmentSimilarity } from "@/lib/pose/poseDrawingUtils";
-import { enrichLandmarks } from "@/lib/pose/landmark";
+import { matchSegmentToLandmarks, segmentSimilarity } from "./poseDrawerHelper";
+import { enrichLandmarks } from "./landmark";
 
 export function PoseMatch({
     posesToMatch = null,
@@ -91,12 +89,10 @@ export function PoseMatch({
     };
 
     return (
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-            <h3 className="text-sm font-bold text-gray-900 mb-3">Pose Matching</h3>
-            
+        <div className="pose-match-container">
             {poseToMatch ? (
                 <>
-                    <div className="mb-3 border border-gray-300 rounded bg-gray-50 flex items-center justify-center overflow-hidden">
+                    <div className="pose-display">
                         {lastValidPoseData && lastValidPoseData.poseLandmarks ? (
                             <PoseDrawer
                                 poseData={lastValidPoseData}
@@ -105,54 +101,32 @@ export function PoseMatch({
                                 similarityScores={similarityScores}
                             />
                         ) : (
-                            <div className="h-96 flex items-center justify-center">
-                                <p className="text-sm text-gray-500">Waiting for valid pose data...</p>
-                            </div>
+                            <p>Waiting for valid pose data...</p>
                         )}
                     </div>
-                    
-                    <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded">
-                        <h4 className="text-xs font-semibold text-gray-700 mb-2">Segment Scores:</h4>
-                        <div className="space-y-1">
-                            {similarityScores.map(({segment, similarityScore}) => (
-                                <div key={segment} className="flex items-center justify-between text-xs">
-                                    <span className="text-gray-700">{segment}:</span>
-                                    <span className={`font-semibold ${
-                                        similarityScore >= 80 ? 'text-green-600' : 
-                                        similarityScore >= 50 ? 'text-yellow-600' : 
-                                        'text-red-600'
-                                    }`}>
-                                        {similarityScore.toFixed(1)}%
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                        
-                        <div className="mt-2 pt-2 border-t border-gray-300 flex items-center justify-between">
-                            <span className="text-xs font-bold text-gray-900">Overall Similarity:</span>
-                            <span className={`text-sm font-bold ${
-                                overallSimilarity >= 80 ? 'text-green-600' : 
-                                overallSimilarity >= 50 ? 'text-yellow-600' : 
-                                'text-red-600'
-                            }`}>
-                                {overallSimilarity.toFixed(1)}%
-                            </span>
+                    <div className="similarity-scores">
+                        {similarityScores.map(({segment, similarityScore}) => (
+                            <div key={segment} className="score-item">
+                                <span>{segment}:</span>
+                                <span>{similarityScore.toFixed(1)}%</span>
+                            </div>
+                        ))}
+                        <div className="overall-score">
+                            <span>Overall Similarity:</span>
+                            <span>{overallSimilarity.toFixed(1)}%</span>
                         </div>
                     </div>
-                    
                     {posesToMatch.length > 1 && (
                         <button 
-                            className="w-full px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition"
+                            className="next-pose-btn"
                             onClick={cycleToNextPose}
                         >
-                            Next Pose ({posesToMatch.findIndex(p => p === poseToMatch) + 1}/{posesToMatch.length})
+                            Next Pose
                         </button>
                     )}
                 </>
             ) : (
-                <div className="h-96 flex items-center justify-center">
-                    <p className="text-sm text-gray-500">No pose data available</p>
-                </div>
+                <p>Pose data not available</p>
             )}
         </div>
     );

@@ -1,7 +1,164 @@
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import PoseDrawer from "./poseDrawer";
-import { useState, useEffect, useMemo } from "react";
-import { matchSegmentToLandmarks, segmentSimilarity } from './PoseDrawingUtils';
-import { enrichLandmarks } from './LandmarkUtils';
+import { matchSegmentToLandmarks, segmentSimilarity } from "./poseDrawerHelper";
+import { enrichLandmarks } from "./landmark";
+
+const interpolateLandmark = (start, end, progress) => {
+  if (!start || !end) return null;
+  
+  return {
+    x: start.x + (end.x - start.x) * progress,
+    y: start.y + (end.y - start.y) * progress,
+    z: start.z + (end.z - start.z) * progress,
+    visibility: start.visibility
+  };
+};
+
+const interpolatePoseData = (startPose, endPose, progress) => {
+  if (!startPose || !endPose) {
+    console.log('Missing pose data:', { startPose, endPose });
+    return null;
+  }
+
+  const result = {
+    faceLandmarks: [],
+    image: startPose.image,
+    leftHandLandmarks: [],
+    multiFaceGeometry: [],
+    poseLandmarks: [],
+    rightHandLandmarks: [],
+    segmentationMask: [],
+    za: []
+  };
+
+  // Interpolate pose landmarks
+  if (startPose.poseLandmarks && endPose.poseLandmarks) {
+    result.poseLandmarks = startPose.poseLandmarks.map((landmark, i) => 
+      interpolateLandmark(landmark, endPose.poseLandmarks[i], progress)
+    );
+  }
+
+  // Interpolate right hand landmarks
+  if (startPose.rightHandLandmarks && endPose.rightHandLandmarks) {
+    result.rightHandLandmarks = startPose.rightHandLandmarks.map((landmark, i) => 
+      interpolateLandmark(landmark, endPose.rightHandLandmarks[i], progress)
+    );
+  }
+
+  if (startPose.leftHandLandmarks && endPose.leftHandLandmarks) {
+    result.leftHandLandmarks = startPose.leftHandLandmarks.map((landmark, i) => 
+      interpolateLandmark(landmark, endPose.leftHandLandmarks[i], progress)
+    );
+  }
+
+  // Interpolate face landmarks
+  if (startPose.faceLandmarks && endPose.faceLandmarks) {
+    result.faceLandmarks = startPose.faceLandmarks.map((landmark, i) => 
+      interpolateLandmark(landmark, endPose.faceLandmarks[i], progress)
+    );
+  }
+
+  return result;
+};
+
+const easeInOutCubic = t => 
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+export function Tween({ 
+  poses = [], 
+  duration = 2000,
+  width = 800,
+  height = 600,
+  loop = false,
+  isPlaying = false
+}) {
+  const [currentPose, setCurrentPose] = useState(null);
+  // FIX: Use a ref for startTime to avoid stale closures and re-spawning animation loops
+  const startTimeRef = useRef(null);
+  const rafRef = useRef(null);
+
+  const animate = useCallback((timestamp) => {
+    if (!startTimeRef.current) {
+      startTimeRef.current = timestamp;
+    }
+
+    const elapsed = timestamp - startTimeRef.current;
+    const totalDuration = duration * (poses.length - 1);
+    let progress = elapsed / totalDuration;
+
+    // Calculate which poses to interpolate between
+    const absoluteProgress = progress * (poses.length - 1);
+    const currentIndex = Math.min(Math.floor(absoluteProgress), poses.length - 2);
+    const nextIndex = Math.min(currentIndex + 1, poses.length - 1);
+    const segmentProgress = absoluteProgress - currentIndex;
+
+    if (progress >= 1) {
+      if (loop) {
+        startTimeRef.current = timestamp;
+        rafRef.current = requestAnimationFrame(animate);
+      } else {
+        // Ensure we end on the final pose
+        setCurrentPose(poses[poses.length - 1]);
+      }
+      return;
+    }
+
+    // Apply easing to the segment progress
+    const easedProgress = easeInOutCubic(segmentProgress);
+
+    // Interpolate between current and next pose
+    const interpolatedPose = interpolatePoseData(
+      poses[currentIndex],
+      poses[nextIndex],
+      easedProgress
+    );
+
+    setCurrentPose(interpolatedPose);
+
+    if (isPlaying) {
+      rafRef.current = requestAnimationFrame(animate);
+    }
+  }, [poses, duration, loop, isPlaying]);
+
+  useEffect(() => {
+    if (isPlaying && poses.length > 1) {
+      startTimeRef.current = null;
+      // FIX: Cancel any existing animation frame before starting a new one
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(animate);
+    }
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [isPlaying, animate, poses]);
+
+  // If no current pose, use the first pose
+  const poseToRender = currentPose || poses[0];
+
+  return (
+    <div>
+      {poseToRender ? (
+        <PoseDrawer
+          poseData={poseToRender}
+          width={width}
+          height={height}
+          similarityScore={null}
+        />
+      ) : (
+        <p>Pose data not available</p>
+      )}
+    </div>
+  );
+}
+
+// FIX: Moved matchConfig outside component so it's not recreated on every render
+const MATCH_CONFIG = [
+  {"segment": "RIGHT_BICEP", "data": "poseLandmarks"}, 
+  {"segment": "RIGHT_FOREARM", "data": "poseLandmarks"},
+  {"segment": "LEFT_BICEP", "data": "poseLandmarks"}, 
+  {"segment": "LEFT_FOREARM", "data": "poseLandmarks"}
+];
 
 export function PoseMatch({
     posesToMatch = null,
@@ -10,13 +167,6 @@ export function PoseMatch({
     const [poseToMatch, setPoseToMatch] = useState(null);
     const [similarityScores, setSimilarityScores] = useState([]);
     const [lastValidPoseData, setLastValidPoseData] = useState(null);
-
-    const matchConfig = [
-        {"segment": "RIGHT_BICEP", "data": "poseLandmarks"}, 
-        {"segment": "RIGHT_FOREARM", "data": "poseLandmarks"},
-        {"segment": "LEFT_BICEP", "data": "poseLandmarks"}, 
-        {"segment": "LEFT_FOREARM", "data": "poseLandmarks"}
-    ];
 
     const width = 400;
     const height = 600;
@@ -42,7 +192,7 @@ export function PoseMatch({
         const enrichedPoseData = enrichLandmarks(lastValidPoseData);
         const enrichedPoseToMatch = enrichLandmarks(poseToMatch);
 
-        const newSimilarityScores = matchConfig.map(config => {
+        const newSimilarityScores = MATCH_CONFIG.map(config => {
             const playerSegment = matchSegmentToLandmarks(
                 config,
                 enrichedPoseData,
@@ -70,7 +220,7 @@ export function PoseMatch({
         setSimilarityScores(newSimilarityScores);
     }, [lastValidPoseData, poseToMatch]);
 
-    // Calculate overall similarity score
+    // FIX: Added useMemo import — was used but missing from imports
     const overallSimilarity = useMemo(() => {
         if (similarityScores.length === 0) return 0;
         const validScores = similarityScores

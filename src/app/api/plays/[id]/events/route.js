@@ -1,46 +1,58 @@
 import { NextResponse } from "next/server";
-
-import { ref, push } from "firebase/database";
-
-import { db } from "@/lib/firebase/firebaseClient";
-
+import { db } from "@/lib/firebase/firebaseAdmin";
 import { requireSession } from "@/lib/firebase/requireSession";
 import { requirePlayOwner } from "@/lib/firebase/requirePlayOwner";
 
 export const runtime = "nodejs";
 
-
 export async function POST(req, { params }) {
-
-  const { success, response, session } =
-    await requireSession(req);
-
+  const { success, response, user } = await requireSession(req);
   if (!success) return response;
 
-  const isOwner =
-    await requirePlayOwner(params.playId, session.uid);
+  const { id } = await params;
+  if (!id) {
+    return NextResponse.json(
+      { success: false, message: "Missing play id" },
+      { status: 400 }
+    );
+  }
 
-  if (!isOwner)
+  const isOwner = await requirePlayOwner(id, user.uid);
+  if (!isOwner) {
     return NextResponse.json(
       { success: false, message: "Forbidden" },
       { status: 403 }
     );
+  }
 
-  const body =
-    await req.json();
+  const body = await req.json().catch(() => ({}));
 
-  const eventRef =
-    push(ref(db, `plays/${params.playId}/eventData`));
+  // ✅ Accept batch shape: { events: [...] }
+  const events = Array.isArray(body.events) ? body.events : null;
 
+  if (events) {
+    const baseRef = db.ref(`plays/${id}/eventData`);
+    const updates = {};
+
+    for (const evt of events) {
+      const key = baseRef.push().key;
+      updates[`plays/${id}/eventData/${key}`] = {
+        ...evt,
+        createdAt: Date.now(),
+      };
+    }
+
+    await db.ref().update(updates);
+
+    return NextResponse.json({ success: true, count: events.length });
+  }
+
+  // ✅ Or accept single event object (legacy)
+  const eventRef = db.ref(`plays/${id}/eventData`).push();
   await eventRef.set({
-
     ...body,
-    createdAt: Date.now()
-
+    createdAt: Date.now(),
   });
 
-  return NextResponse.json({
-    success: true
-  });
-
+  return NextResponse.json({ success: true, count: 1 });
 }
