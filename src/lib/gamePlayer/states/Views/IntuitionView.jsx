@@ -9,31 +9,50 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, x));
 }
 
+function PoseFillBar() {
+  return (
+    <>
+      <span className="pointer-events-none absolute left-0 bottom-0 h-[8px] w-full bg-white/10" />
+      <span
+        className="pointer-events-none absolute left-0 bottom-0 h-[8px] bg-green-500/80"
+        style={{
+          width: "calc(var(--pose-progress, 0) * 100%)",
+          transition: "width 50ms linear",
+        }}
+      />
+    </>
+  );
+}
+
 export default function IntuitionView({ session, node, dispatch }) {
   const question = useMemo(() => {
     const q = String(node?.question ?? "").trim();
     return q.length ? q : "True or False?";
   }, [node?.question]);
 
+  const showCursor = !!session?.flags?.showCursor;
   const [choice, setChoice] = useState(null); // true | false | null
 
   const trueActive = choice === true;
   const falseActive = choice === false;
 
-  const onPick = (v) => {
-    if (choice !== null) return; // single pick
-    setChoice(v);
+  const PICK_HOVER_MS = 900;
 
-    // UI-only: tell the rest of the system what happened via NEXT payload
+  const onPick = (v) => {
+    if (!showCursor) return;
+    if (choice !== null) return;
+    setChoice(v);
     dispatch(commands.next({ source: "intuition", answer: v }));
   };
 
   const baseCard =
-    "relative w-full rounded-[28px] ring-2 transition-all duration-150 select-none";
+    "next-button relative overflow-hidden w-full rounded-[28px] ring-2 transition-all duration-150 select-none";
   const activeCard =
     "bg-white/25 ring-white/60 shadow-[0_0_0_2px_rgba(255,255,255,0.25)]";
   const idleCard = "bg-black/35 ring-white/20 hover:bg-black/25 hover:ring-white/35";
   const disabledCard = "opacity-50 cursor-not-allowed";
+
+  const disabled = !showCursor || choice !== null;
 
   return (
     <div className="absolute inset-0 z-30 pointer-events-auto">
@@ -66,20 +85,20 @@ export default function IntuitionView({ session, node, dispatch }) {
           <button
             type="button"
             onClick={() => onPick(true)}
-            disabled={choice !== null}
-            data-cursor-id="intuition-true"
+            disabled={disabled}
+            data-pose-hover-ms={PICK_HOVER_MS}
             className={[
               baseCard,
               trueActive ? activeCard : idleCard,
-              choice !== null ? disabledCard : "",
+              disabled ? disabledCard : "",
               "p-10 text-left",
             ].join(" ")}
           >
-            <div className="flex items-center justify-between gap-6">
+            <PoseFillBar />
+
+            <div className="relative z-10 flex items-center justify-between gap-6">
               <div>
-                <div className="text-white/95 font-extrabold tracking-wide text-5xl">
-                  TRUE
-                </div>
+                <div className="text-white/95 font-extrabold tracking-wide text-5xl">TRUE</div>
                 <div className="mt-3 text-white/70 text-base">
                   Select if the statement is correct.
                 </div>
@@ -100,20 +119,20 @@ export default function IntuitionView({ session, node, dispatch }) {
           <button
             type="button"
             onClick={() => onPick(false)}
-            disabled={choice !== null}
-            data-cursor-id="intuition-false"
+            disabled={disabled}
+            data-pose-hover-ms={PICK_HOVER_MS}
             className={[
               baseCard,
               falseActive ? activeCard : idleCard,
-              choice !== null ? disabledCard : "",
+              disabled ? disabledCard : "",
               "p-10 text-left",
             ].join(" ")}
           >
-            <div className="flex items-center justify-between gap-6">
+            <PoseFillBar />
+
+            <div className="relative z-10 flex items-center justify-between gap-6">
               <div>
-                <div className="text-white/95 font-extrabold tracking-wide text-5xl">
-                  FALSE
-                </div>
+                <div className="text-white/95 font-extrabold tracking-wide text-5xl">FALSE</div>
                 <div className="mt-3 text-white/70 text-base">
                   Select if the statement is incorrect.
                 </div>
@@ -132,7 +151,11 @@ export default function IntuitionView({ session, node, dispatch }) {
           </button>
 
           <div className="text-center text-white/45 text-xs pt-2">
-            {choice === null ? "Hover and select with cursor, or click." : "Selected — continuing…"}
+            {!showCursor
+              ? "Please wait…"
+              : choice === null
+              ? "Hover to select (progress fills), or click."
+              : "Selected — continuing…"}
           </div>
         </div>
       </div>

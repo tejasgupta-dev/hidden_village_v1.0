@@ -35,7 +35,6 @@ function normalizeOptions(node) {
   const raw = node?.options ?? node?.answers ?? node?.choices ?? null;
   if (!raw) return [];
 
-  // allow array: ["a","b"] OR [{text:"a"}]
   if (Array.isArray(raw)) {
     return raw
       .map((x, idx) => {
@@ -49,7 +48,6 @@ function normalizeOptions(node) {
       .filter((o) => o.label.trim().length > 0);
   }
 
-  // allow object: {0:"A", 1:"B"} or {a:"A", b:"B"}
   if (raw && typeof raw === "object") {
     return Object.entries(raw)
       .map(([k, v], idx) => {
@@ -63,7 +61,6 @@ function normalizeOptions(node) {
 }
 
 function gridConfig(n) {
-  // Aim: big tiles + lots of space. Keep rows small.
   if (n <= 1) return { cols: 1, rows: 1 };
   if (n === 2) return { cols: 2, rows: 1 };
   if (n <= 4) return { cols: 2, rows: 2 };
@@ -72,19 +69,44 @@ function gridConfig(n) {
   return { cols: 4, rows: Math.ceil(n / 4) };
 }
 
-export default function InsightView({ session, node, dispatch, width, height }) {
+function PoseFillBar() {
+  return (
+    <>
+      {/* track */}
+      <span className="pointer-events-none absolute left-0 bottom-0 h-[8px] w-full bg-white/10" />
+      {/* fill uses CSS var set by PoseCursor: --pose-progress */}
+      <span
+        className="pointer-events-none absolute left-0 bottom-0 h-[8px] bg-green-500/80"
+        style={{
+          width: "calc(var(--pose-progress, 0) * 100%)",
+          transition: "width 50ms linear",
+        }}
+      />
+    </>
+  );
+}
+
+export default function InsightView({ session, node, dispatch }) {
   const insights = useMemo(() => normalizeInsights(node), [node]);
   const options = useMemo(() => normalizeOptions(node), [node]);
   const question = String(node?.question ?? "").trim();
+
+  const showCursor = !!session?.flags?.showCursor;
 
   const [i, setI] = useState(0);
   const current = insights[i]?.text ?? "";
 
   const hasOptions = options.length > 0;
-
   const { cols } = useMemo(() => gridConfig(options.length), [options.length]);
 
+  // you can tune these per-state if you want
+  const OPTION_HOVER_MS = 900;
+  const NEXT_HOVER_MS = 700;
+  const SKIP_HOVER_MS = 900;
+
   const onPickOption = (opt) => {
+    if (!showCursor) return;
+
     dispatch({
       type: "COMMAND",
       name: "INSIGHT_OPTION_SELECTED",
@@ -97,11 +119,12 @@ export default function InsightView({ session, node, dispatch, width, height }) 
       },
     });
 
-    // For now: advance immediately (you said logging later)
     dispatch(commands.next({ source: "insight", optionId: opt.id }));
   };
 
   const onNextInsight = () => {
+    if (!showCursor) return;
+
     dispatch({
       type: "COMMAND",
       name: "INSIGHT_RESULT",
@@ -118,7 +141,7 @@ export default function InsightView({ session, node, dispatch, width, height }) 
     <div className="absolute inset-0 z-30 pointer-events-auto">
       <div className="absolute inset-0 bg-black/35" />
 
-      {/* Top bar: question + current insight */}
+      {/* Top bar */}
       <div className="absolute left-0 right-0 top-0 p-8">
         <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
           <div className="text-white/60 text-sm">Insight</div>
@@ -142,17 +165,16 @@ export default function InsightView({ session, node, dispatch, width, height }) 
             </div>
           ) : (
             <div className="mt-4 text-white/50 text-sm">
-              Tap an option below to continue
+              {showCursor ? "Hover an option to continue" : "Please wait…"}
             </div>
           )}
         </div>
       </div>
 
-      {/* Options grid (only when options exist) */}
+      {/* Options grid */}
       {hasOptions ? (
         <div className="absolute inset-x-0 top-[220px] bottom-0 p-8">
           <div className="mx-auto max-w-6xl h-full">
-            {/* Big gaps = “rest space” */}
             <div
               className="h-full grid"
               style={{
@@ -164,30 +186,33 @@ export default function InsightView({ session, node, dispatch, width, height }) 
                 <button
                   key={opt.id ?? idx}
                   type="button"
-                  data-cursor-id={`insight-opt-${opt.id ?? idx}`}
                   onClick={() => onPickOption(opt)}
+                  disabled={!showCursor}
+                  data-pose-hover-ms={OPTION_HOVER_MS}
                   className={[
+                    "next-button", // ✅ PoseCursor selector
+                    "relative overflow-hidden", // ✅ progress bar
                     "rounded-[28px] ring-2 ring-white/20",
-                    "bg-black/55 hover:bg-black/45 active:bg-black/40",
+                    showCursor
+                      ? "bg-black/55 hover:bg-black/45 active:bg-black/40"
+                      : "bg-black/30 opacity-50 cursor-not-allowed",
                     "transition-all duration-150",
                     "p-8 text-left",
                     "flex items-center justify-center",
                     "min-h-[140px]",
                   ].join(" ")}
                 >
-                  <div className="w-full">
+                  <PoseFillBar />
+
+                  <div className="relative z-10 w-full">
                     <div className="text-white/95 font-semibold leading-snug text-2xl">
                       {opt.label}
                     </div>
-                    <div className="mt-3 text-white/45 text-xs">
-                      Option {idx + 1}
-                    </div>
+                    <div className="mt-3 text-white/45 text-xs">Option {idx + 1}</div>
                   </div>
                 </button>
               ))}
 
-              {/* If you want extra “rest area” even when grid isn't full:
-                  render empty spacers to fill the last row */}
               {(() => {
                 const totalSlots = Math.ceil(options.length / cols) * cols;
                 const empties = totalSlots - options.length;
@@ -203,24 +228,44 @@ export default function InsightView({ session, node, dispatch, width, height }) 
           </div>
         </div>
       ) : (
-        // Bottom controls (only when no options)
+        // Bottom controls (no options)
         <div className="absolute left-0 right-0 bottom-0 p-8">
           <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-6">
             <div className="flex items-center justify-end gap-4">
               <button
                 type="button"
-                className="px-6 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white"
+                disabled={!showCursor}
+                data-pose-hover-ms={SKIP_HOVER_MS}
                 onClick={() => dispatch(commands.next({ source: "insight-skip" }))}
+                className={[
+                  "next-button",
+                  "relative overflow-hidden",
+                  "px-6 py-3 rounded-2xl text-white",
+                  showCursor
+                    ? "bg-white/10 hover:bg-white/20"
+                    : "bg-white/5 text-white/40 cursor-not-allowed",
+                ].join(" ")}
               >
-                Skip
+                <PoseFillBar />
+                <span className="relative z-10">Skip</span>
               </button>
 
               <button
                 type="button"
-                className="px-8 py-3 rounded-2xl bg-white text-black hover:bg-gray-200 font-semibold"
+                disabled={!showCursor}
+                data-pose-hover-ms={NEXT_HOVER_MS}
                 onClick={onNextInsight}
+                className={[
+                  "next-button",
+                  "relative overflow-hidden",
+                  "px-8 py-3 rounded-2xl font-semibold",
+                  showCursor
+                    ? "bg-white text-black hover:bg-gray-200"
+                    : "bg-white/10 text-white/40 cursor-not-allowed",
+                ].join(" ")}
               >
-                Next →
+                <PoseFillBar />
+                <span className="relative z-10">Next →</span>
               </button>
             </div>
           </div>
