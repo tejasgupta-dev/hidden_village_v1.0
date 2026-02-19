@@ -41,7 +41,7 @@ export default function TweenView({ session, node, dispatch, width = 800, height
     return ids.map((id) => safeParsePose(poseMap[id])).filter(Boolean);
   }, [node?.poseIds, poseMap]);
 
-  const stepDurationMS = node?.stepDurationMS ?? 600;
+  const stepDurationMS = node?.stepDurationMS ?? 1000;
   const totalDuration = Math.max(1, poses.length - 1) * stepDurationMS;
 
   const onNext = () => dispatch(commands.next());
@@ -55,11 +55,12 @@ export default function TweenView({ session, node, dispatch, width = 800, height
       <div className="absolute inset-0 flex items-center justify-center">
         {poses.length >= 2 ? (
           <Tween
+            key={`tween:${session.playId ?? "p"}:${session.nodeIndex}:${session.tweenPlayIndex ?? 0}`}
             poses={poses}
-            duration={stepDurationMS} // your Tween interprets this as "per segment"
+            duration={stepDurationMS}
             width={width}
             height={height}
-            loop={false}
+            loop={true}
             isPlaying={true}
           />
         ) : (

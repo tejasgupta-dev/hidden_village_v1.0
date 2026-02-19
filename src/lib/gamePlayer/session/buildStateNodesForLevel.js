@@ -164,12 +164,13 @@ export function buildStateNodesForLevel({
   const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
   const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  // ✅ ONE TWEEN node for all transitions (only if 2+ poses)
+  // ONE TWEEN node for all transitions (only if 2+ poses)
   if (poseIds.length >= 2 && STATE_TYPES.TWEEN) {
+    console.log(a)
     nodes.push({
       type: STATE_TYPES.TWEEN,
       poseIds,
-      stepDurationMS: level?.tweenDurationMS ?? storyLevel?.tweenDurationMS ?? 600,
+      stepDurationMS: level?.tweenDurationMS ?? storyLevel?.tweenDurationMS ?? 1000,
       easing: level?.tweenEasing ?? storyLevel?.tweenEasing ?? "easeInOut",
       cursorDelayMS,
       levelId: level?.id ?? levelDocId ?? null,
@@ -181,7 +182,7 @@ export function buildStateNodesForLevel({
     nodes.push({
       type: STATE_TYPES.POSE_MATCH,
       poseIds,
-      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 0.85,
+      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 60,
       cursorDelayMS,
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
       levelId: level?.id ?? levelDocId ?? null,
