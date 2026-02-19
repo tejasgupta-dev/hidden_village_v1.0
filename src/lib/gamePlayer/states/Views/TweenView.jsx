@@ -55,8 +55,9 @@ export default function TweenView({ session, node, dispatch, width = 800, height
       <div className="absolute inset-0 flex items-center justify-center">
         {poses.length >= 2 ? (
           <Tween
+            key={`tween:${session.playId ?? "p"}:${session.nodeIndex}:${session.tweenPlayIndex ?? 0}`}
             poses={poses}
-            duration={stepDurationMS} // your Tween interprets this as "per segment"
+            duration={stepDurationMS}
             width={width}
             height={height}
             loop={false}

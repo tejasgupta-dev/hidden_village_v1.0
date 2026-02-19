@@ -4,6 +4,8 @@ import { createSession } from "./createSession";
 import { scheduleIn, cancelTimersByTag, runDueTimers } from "./timers";
 import { STATE_TYPES, normalizeStateType } from "../states/_shared/stateTypes";
 
+/* ----------------------------- small utils ----------------------------- */
+
 function pushEffect(session, effect) {
   return { ...session, effects: [...(session.effects ?? []), effect] };
 }
@@ -20,8 +22,12 @@ function isDialogueLikeType(t) {
   return t === STATE_TYPES.INTRO || t === STATE_TYPES.OUTRO;
 }
 
+/* NOTE:
+ * TWEEN is NOT "stepped" anymore — no click-per-transition.
+ * Pose match can still be stepped via stepIndex.
+ */
 function isSteppedPoseType(t) {
-  return t === STATE_TYPES.TWEEN || t === STATE_TYPES.POSE_MATCH;
+  return t === STATE_TYPES.POSE_MATCH;
 }
 
 /* ----------------------------- eventId helpers ----------------------------- */
@@ -41,10 +47,12 @@ function withEventId(session, evt) {
   const st = evt?.stateType ?? nodeType(session?.node) ?? "unknown";
   const di = evt?.dialogueIndex;
   const si = evt?.stepIndex;
+  const pi = evt?.playIndex;
 
   const parts = [baseEventId(session), t, `n${ni}`, `s${st}`];
   if (di != null) parts.push(`d${di}`);
   if (si != null) parts.push(`k${si}`);
+  if (pi != null) parts.push(`p${pi}`);
 
   return { ...evt, eventId: parts.join("|") };
 }
@@ -98,13 +106,10 @@ export function sessionReducer(session, action) {
       const dt = action.dt ?? Math.max(0, now - session.time.now);
       const elapsed = action.elapsed ?? (session.time.elapsed + dt);
 
-      let next = {
-        ...session,
-        time: { ...session.time, now, dt, elapsed },
-      };
+      let next = { ...session, time: { ...session.time, now, dt, elapsed } };
 
       next = runDueTimers(next, applyTimer);
-      next = maybeScheduleAutoAdvance(next);
+      next = scheduleAutoAdvanceIfNeeded(next);
 
       return next;
     }
@@ -140,7 +145,7 @@ export function applyCommand(session, name, payload) {
 
       next = emitTelemetry(next, { type: "RESUME", at: session.time.now });
 
-      // ✅ cursor applies to ALL states
+      // cursor applies to ALL states
       next = scheduleCursor(next);
       return next;
     }
@@ -183,10 +188,24 @@ export function applyCommand(session, name, payload) {
   }
 }
 
-/* ----------------------------- Node handling ----------------------------- */
+/* ----------------------------- node handling ----------------------------- */
 
 function currentNode(session) {
   return session.levelStateNodes?.[session.nodeIndex] ?? null;
+}
+
+function cancelNodeTimers(session, nodeIndex) {
+  let s = session;
+
+  // cursor + default auto tag
+  s = cancelTimersByTag(s, "cursorDelay");
+  s = cancelTimersByTag(s, `auto:${nodeIndex}`);
+
+  // tween-specific tags
+  s = cancelTimersByTag(s, `tween:${nodeIndex}:replay`);
+  s = cancelTimersByTag(s, `tween:${nodeIndex}:finish`);
+
+  return s;
 }
 
 function enterNode(session, nodeIndex, { reason } = {}) {
@@ -200,12 +219,13 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     flags: { ...session.flags, showCursor: false },
   };
 
-  // Cancel node-scoped timers
-  next = cancelTimersByTag(next, "cursorDelay");
-  next = cancelTimersByTag(next, `auto:${nodeIndex}`);
+  next = cancelNodeTimers(next, nodeIndex);
 
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
+
+  // TWEEN replay counter (drives TweenView `key` to restart)
+  if (t === STATE_TYPES.TWEEN) next = { ...next, tweenPlayIndex: 0 };
 
   next = emitTelemetry(next, {
     type: "STATE_ENTER",
@@ -226,9 +246,9 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     nodeIndex,
   });
 
-  // ✅ cursor applies to ALL states
+  // cursor applies to ALL states
   next = scheduleCursor(next);
-  next = maybeScheduleAutoAdvance(next);
+  next = scheduleAutoAdvanceIfNeeded(next);
 
   return next;
 }
@@ -278,7 +298,7 @@ function handleNext(session) {
     const nextDialogueIndex = (session.dialogueIndex ?? 0) + 1;
 
     if (Array.isArray(lines) && lines.length > 0) {
-      let s = cancelTimersByTag(session, `auto:${session.nodeIndex}`);
+      let s = cancelNodeTimers(session, session.nodeIndex);
 
       if (nextDialogueIndex < lines.length) {
         s = {
@@ -286,8 +306,6 @@ function handleNext(session) {
           dialogueIndex: nextDialogueIndex,
           flags: { ...s.flags, showCursor: false },
         };
-
-        s = cancelTimersByTag(s, "cursorDelay");
 
         s = emitTelemetry(s, {
           type: "DIALOGUE_NEXT",
@@ -297,9 +315,8 @@ function handleNext(session) {
           dialogueIndex: nextDialogueIndex,
         });
 
-        // ✅ cursor applies to ALL states (including dialogue)
         s = scheduleCursor(s);
-        s = maybeScheduleAutoAdvance(s);
+        s = scheduleAutoAdvanceIfNeeded(s);
         return s;
       }
 
@@ -310,37 +327,26 @@ function handleNext(session) {
         stateType: t,
       });
 
-      s2 = cancelTimersByTag(s2, "cursorDelay");
-      s2 = cancelTimersByTag(s2, `auto:${session.nodeIndex}`);
-
+      s2 = cancelNodeTimers(s2, session.nodeIndex);
       return goNextNode(s2, { reason: "DIALOGUE_FINISHED" });
     }
 
     return goNextNode(session, { reason: "NO_DIALOGUE_LINES" });
   }
 
-  // Tween steps
+  // ✅ TWEEN: autoplay; Next ends early (skip to next node)
   if (t === STATE_TYPES.TWEEN) {
-    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
-    const transitions = Math.max(0, poseIds.length - 1);
-    const i = session.stepIndex ?? 0;
+    let s = cancelNodeTimers(session, session.nodeIndex);
 
-    if (transitions <= 0) return goNextNode(session, { reason: "TWEEN_EMPTY" });
+    s = emitTelemetry(s, {
+      type: "TWEEN_SKIP",
+      at: s.time.now,
+      nodeIndex: s.nodeIndex,
+      stateType: t,
+      playIndex: s.tweenPlayIndex ?? 0,
+    });
 
-    if (i + 1 < transitions) {
-      const s = { ...session, stepIndex: i + 1 };
-      return emitTelemetry(s, {
-        type: "TWEEN_STEP",
-        at: s.time.now,
-        nodeIndex: s.nodeIndex,
-        stateType: t,
-        stepIndex: s.stepIndex,
-        fromPoseId: poseIds[s.stepIndex],
-        toPoseId: poseIds[s.stepIndex + 1],
-      });
-    }
-
-    return goNextNode(session, { reason: "TWEEN_FINISHED" });
+    return goNextNode(s, { reason: "TWEEN_SKIPPED" });
   }
 
   // Pose match steps
@@ -352,6 +358,7 @@ function handleNext(session) {
 
     if (i + 1 < poseIds.length) {
       const s = { ...session, stepIndex: i + 1 };
+
       return emitTelemetry(s, {
         type: "POSE_MATCH_NEXT_TARGET",
         at: s.time.now,
@@ -368,7 +375,7 @@ function handleNext(session) {
   return goNextNode(session, { reason: "NEXT_COMMAND" });
 }
 
-/* ----------------------------- Timers ----------------------------- */
+/* ----------------------------- timers ----------------------------- */
 
 function applyTimer(session, timer) {
   switch (timer.kind) {
@@ -387,13 +394,26 @@ function applyTimer(session, timer) {
     case "AUTO_ADVANCE":
       return goNextNode(session, { reason: "AUTO_ADVANCE" });
 
+    // ✅ TWEEN replay: bumps play index so TweenView can restart via `key`
+    case "TWEEN_REPLAY": {
+      const nextPlayIndex = (session.tweenPlayIndex ?? 0) + 1;
+      const next = { ...session, tweenPlayIndex: nextPlayIndex };
+
+      return emitTelemetry(next, {
+        type: "TWEEN_REPLAY",
+        at: session.time.now,
+        nodeIndex: session.nodeIndex,
+        playIndex: nextPlayIndex,
+      });
+    }
+
     default:
       return session;
   }
 }
 
 /**
- * ✅ Cursor scheduling for ALL states.
+ * Cursor scheduling for ALL states.
  * - uses node.cursorDelayMS if present
  * - falls back to session.settings.cursor.delayMS
  * - 0/undefined => show immediately
@@ -403,7 +423,6 @@ function scheduleCursor(session) {
   if (!node) return session;
 
   const delayMS = node?.cursorDelayMS ?? session.settings?.cursor?.delayMS ?? 0;
-
   const next = cancelTimersByTag(session, "cursorDelay");
 
   if (!delayMS || delayMS <= 0) {
@@ -417,34 +436,88 @@ function scheduleCursor(session) {
   });
 }
 
-function maybeScheduleAutoAdvance(session) {
+/* ----------------------------- tween scheduling ----------------------------- */
+
+function getTweenLoops(session, node) {
+  const n =
+    node?.tweenLoops ??
+    node?.loops ??
+    node?.loopCount ??
+    session.settings?.tween?.loops ??
+    10;
+
+  const asInt = Number.isFinite(Number(n)) ? Math.floor(Number(n)) : 1;
+  return Math.max(1, asInt);
+}
+
+function getTweenOnePlayMS(node) {
+  const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+  const transitions = Math.max(0, poseIds.length - 1);
+  const stepDurationMS = node?.stepDurationMS ?? 600; // per segment
+  return transitions * stepDurationMS;
+}
+
+/**
+ * Auto-advance scheduling.
+ * - Dialogue: uses node.autoAdvanceMS/durationMS to call NEXT (advance dialogue)
+ * - Normal states: uses node.autoAdvanceMS/durationMS to ADVANCE node
+ * - TWEEN: reducer controls finite loop count; schedules replay timers and final node advance.
+ */
+function scheduleAutoAdvanceIfNeeded(session) {
   const node = currentNode(session);
   if (!node) return session;
 
-  const autoMS = node?.autoAdvanceMS ?? node?.durationMS;
-  if (!autoMS) return session;
-
-  const tag = `auto:${session.nodeIndex}`;
-  if ((session.timers ?? []).some((t) => t.tag === tag)) return session;
-
   const t = nodeType(node);
 
-  if (isDialogueLikeType(t)) {
+  // ✅ TWEEN: schedule replay(s) + finish based on tweenLoops
+  if (t === STATE_TYPES.TWEEN) {
+    const onePlayMS = getTweenOnePlayMS(node);
+    if (!onePlayMS || onePlayMS <= 0) return session;
+
+    const loops = getTweenLoops(session, node);
+    const playIndex = session.tweenPlayIndex ?? 0;
+
+    const replayTag = `tween:${session.nodeIndex}:replay`;
+    const finishTag = `tween:${session.nodeIndex}:finish`;
+
+    const hasReplay = (session.timers ?? []).some((tm) => tm.tag === replayTag);
+    const hasFinish = (session.timers ?? []).some((tm) => tm.tag === finishTag);
+
+    // We schedule ONE timer at a time.
+    // If we still owe replays, schedule next replay.
+    if (playIndex + 1 < loops) {
+      if (hasReplay || hasFinish) return session;
+      return scheduleIn(session, {
+        tag: replayTag,
+        kind: "TWEEN_REPLAY",
+        delayMS: onePlayMS,
+      });
+    }
+
+    // Last play: schedule finish to go next node after it completes
+    if (hasFinish || hasReplay) return session;
     return scheduleIn(session, {
-      tag,
-      kind: "AUTO_NEXT",
-      delayMS: autoMS,
+      tag: finishTag,
+      kind: "AUTO_ADVANCE",
+      delayMS: onePlayMS,
     });
   }
 
-  return scheduleIn(session, {
-    tag,
-    kind: "AUTO_ADVANCE",
-    delayMS: autoMS,
-  });
+  // Default (non-tween) auto behavior
+  const tag = `auto:${session.nodeIndex}`;
+  if ((session.timers ?? []).some((tm) => tm.tag === tag)) return session;
+
+  const autoMS = node?.autoAdvanceMS ?? node?.durationMS ?? 0;
+  if (!autoMS || autoMS <= 0) return session;
+
+  if (isDialogueLikeType(t)) {
+    return scheduleIn(session, { tag, kind: "AUTO_NEXT", delayMS: autoMS });
+  }
+
+  return scheduleIn(session, { tag, kind: "AUTO_ADVANCE", delayMS: autoMS });
 }
 
-/* ----------------------------- Settings util ----------------------------- */
+/* ----------------------------- settings util ----------------------------- */
 
 function setByPath(obj, path, value) {
   const parts = String(path).split(".").filter(Boolean);
