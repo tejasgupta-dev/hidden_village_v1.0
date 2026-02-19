@@ -25,20 +25,6 @@ function clampPct(v, fallback = 60) {
   return clamp(n, 0, 100);
 }
 
-function unwrapDoc(maybeDoc) {
-  if (!maybeDoc) return { id: null, data: null };
-
-  if (typeof maybeDoc?.data === "function") {
-    return { id: maybeDoc?.id ?? null, data: maybeDoc.data() ?? null };
-  }
-
-  if (maybeDoc?.data && isPlainObject(maybeDoc.data)) {
-    return { id: maybeDoc?.id ?? null, data: maybeDoc.data };
-  }
-
-  return { id: maybeDoc?.id ?? null, data: maybeDoc };
-}
-
 function normalizeDialogueLines(raw) {
   if (!raw) return [];
   const arr = Array.isArray(raw)
@@ -59,14 +45,36 @@ function normalizeDialogueLines(raw) {
     .filter((x) => String(x.text ?? "").trim().length > 0);
 }
 
+function normalizeOptions(raw) {
+  if (!raw) return [];
+
+  // Array: ["A","B"] or [{text:"A"}]
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) => {
+        if (typeof x === "string") return x.trim();
+        if (x && typeof x === "object") return String(x.text ?? x.label ?? "").trim();
+        return "";
+      })
+      .filter((s) => s.length > 0);
+  }
+
+  // RTDB object: {0:"A",1:"B"} or {a:"A"}
+  if (isPlainObject(raw)) {
+    return Object.values(raw)
+      .map((v) => (typeof v === "string" ? v.trim() : String(v?.text ?? v?.label ?? "").trim()))
+      .filter((s) => s.length > 0);
+  }
+
+  return [];
+}
+
 function getPoseIds(level) {
   const poses = level?.poses;
   if (!poses) return [];
 
   if (Array.isArray(poses)) {
-    return poses
-      .map((p) => p?.id ?? p?.poseId ?? p?.key ?? null)
-      .filter(Boolean);
+    return poses.map((p) => p?.id ?? p?.poseId ?? p?.key ?? null).filter(Boolean);
   }
 
   if (typeof poses === "object") {
@@ -146,10 +154,7 @@ function resolveDefaultPoseTolerance({ storyLevel, level }) {
 function resolvePoseTolerances({ storyLevel, level }, poseIds) {
   const defaultTol = resolveDefaultPoseTolerance({ storyLevel, level });
 
-  // ✅ canonical field
   const mapA = isPlainObject(level?.poseTolerancePctById) ? level.poseTolerancePctById : null;
-
-  // ✅ legacy support (in case you used a different name earlier)
   const mapB = isPlainObject(level?.poseTolerancesById) ? level.poseTolerancesById : null;
 
   return poseIds.map((poseId) => {
@@ -163,13 +168,16 @@ function resolvePoseTolerances({ storyLevel, level }, poseIds) {
 }
 
 export function buildStateNodesForLevel({ level: levelInput, story: gameInput, levelIndex = 0 }) {
-  const { id: levelDocId, data: level } = unwrapDoc(levelInput);
-  const { id: gameDocId, data: game } = unwrapDoc(gameInput);
+  // ✅ RTDB: treat as plain objects
+  const level = levelInput ?? null;
+  const game = gameInput ?? null;
 
   const nodes = [];
 
-  const storyLevel =
-    Array.isArray(game?.storyline) ? game.storyline[levelIndex] ?? null : null;
+  const storyLevel = Array.isArray(game?.storyline) ? game.storyline[levelIndex] ?? null : null;
+
+  const levelId = level?.id ?? null;
+  const gameId = game?.id ?? null;
 
   // 1) INTRO
   const introLines = normalizeDialogueLines(storyLevel?.intro);
@@ -179,28 +187,68 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
       lines: introLines,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.INTRO),
       autoAdvanceMS: resolveAutoAdvanceMS({ storyLevel, level }, STATE_TYPES.INTRO),
-      levelId: level?.id ?? levelDocId ?? null,
-      gameId: game?.id ?? gameDocId ?? null,
+      levelId,
+      gameId,
     });
   }
 
-  // 2) POSES
+  // 2) Question-derived nodes (INTUITION / INSIGHT)
+  const question = String(level?.question ?? "").trim();
+  const hasQuestion = question.length > 0;
+
+  // ✅ strict boolean only
+  const trueFalseEnabled = level?.trueFalseEnabled === true;
+
+  const optionsRaw = level?.options ?? null;
+  const options = normalizeOptions(optionsRaw);
+  const hasOptions = options.length >= 1;
+
+  // Debug
+  console.log("buildstatenodes log level", level)
+  console.log("[builder] question:", question, "hasQuestion:", hasQuestion);
+  console.log("[builder] trueFalseEnabled:", trueFalseEnabled);
+  console.log("[builder] options.length:", options.length);
+
+  // ✅ INTUITION only if question exists AND trueFalseEnabled
+  if (hasQuestion && trueFalseEnabled) {
+    nodes.push({
+      type: STATE_TYPES.INTUITION,
+      question,
+      trueFalseEnabled: true,
+      trueFalseAnswer: typeof level?.trueFalseAnswer === "boolean" ? level.trueFalseAnswer : null,
+      cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH),
+      levelId,
+      gameId,
+    });
+  }
+
+  // ✅ INSIGHT only if question exists AND options length >= 1
+  if (hasQuestion && hasOptions) {
+    nodes.push({
+      type: STATE_TYPES.INSIGHT,
+      question,
+      options,
+      cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH),
+      levelId,
+      gameId,
+    });
+  }
+
+  // 3) POSES
   const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
   const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  // TWEEN node
-  if (poseIds.length >= 2 && STATE_TYPES.TWEEN) {
+  if (poseIds.length >= 2) {
     nodes.push({
       type: STATE_TYPES.TWEEN,
       poseIds,
       stepDurationMS: level?.tweenDurationMS ?? storyLevel?.tweenDurationMS ?? 1000,
       easing: level?.tweenEasing ?? storyLevel?.tweenEasing ?? "easeInOut",
       cursorDelayMS,
-      levelId: level?.id ?? levelDocId ?? null,
+      levelId,
     });
   }
 
-  // POSE_MATCH node
   if (poseIds.length >= 1) {
     const defaultTolerance = resolveDefaultPoseTolerance({ storyLevel, level });
     const poseTolerances = resolvePoseTolerances({ storyLevel, level }, poseIds);
@@ -213,12 +261,11 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
       poseTolerances,
       cursorDelayMS,
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
-      levelId: level?.id ?? levelDocId ?? null,
+      levelId,
     });
-    console.log("This is builder" ,nodes);
   }
 
-  // 3) OUTRO
+  // 4) OUTRO
   const outroLines = normalizeDialogueLines(storyLevel?.outro);
   if (outroLines.length > 0) {
     nodes.push({
@@ -226,11 +273,11 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
       lines: outroLines,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.OUTRO),
       autoAdvanceMS: resolveAutoAdvanceMS({ storyLevel, level }, STATE_TYPES.OUTRO),
-      levelId: level?.id ?? levelDocId ?? null,
-      gameId: game?.id ?? gameDocId ?? null,
+      levelId,
+      gameId,
     });
   }
 
-  console.log("STATE_NODES", nodes);
+  console.log("[builder] STATE_NODES:", nodes.map((n) => n.type));
   return nodes;
 }

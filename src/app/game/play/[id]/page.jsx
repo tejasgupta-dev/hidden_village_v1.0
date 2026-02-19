@@ -4,24 +4,54 @@ import GamePlayerClient from "./playerClient";
 export const dynamic = "force-dynamic";
 
 function toPlayableLevel(levelId, level) {
+  const question = typeof level?.question === "string" ? level.question : "";
+  const trueFalseEnabled =
+    level?.trueFalseEnabled === true || level?.trueFalseEnabled === "true";
+  const trueFalseAnswer =
+    typeof level?.trueFalseAnswer === "boolean" ? level.trueFalseAnswer : null;
+
+  // options can be array OR RTDB object {0:"...",1:"..."} — keep as-is, builder normalizes
+  const options = level?.options ?? [];
+
   return {
+    // identity
     id: levelId,
     name: level?.name ?? "",
     description: level?.description ?? "",
-    options: level?.options ?? [],
-    answers: level?.answers ?? [],
     keywords: level?.keywords ?? "",
+
+    // pose content
     poses: level?.poses ?? {},
 
-    // ✅ FIX: include tolerance + timing settings so buildStateNodesForLevel can see them
+    // ✅ INSIGHT inputs
+    question,
+    options,
+
+    // ✅ INTUITION inputs
+    trueFalseEnabled,
+    trueFalseAnswer,
+
+    // (keep if you use these elsewhere; harmless)
+    answers: level?.answers ?? [],
+
+    // ✅ pose matching config
     poseTolerancePctById:
       level?.poseTolerancePctById && typeof level.poseTolerancePctById === "object"
         ? level.poseTolerancePctById
         : {},
     poseThreshold: level?.poseThreshold ?? 60,
     poseDurationMS: level?.poseDurationMS ?? null,
+
+    // tween config
     tweenDurationMS: level?.tweenDurationMS ?? null,
     tweenEasing: level?.tweenEasing ?? null,
+
+    // optional per-level cursor settings passthrough
+    settings: level?.settings ?? {},
+    cursorDelayMS: level?.cursorDelayMS ?? null,
+    introCursorDelayMS: level?.introCursorDelayMS ?? null,
+    outroCursorDelayMS: level?.outroCursorDelayMS ?? null,
+    poseCursorDelayMS: level?.poseCursorDelayMS ?? null,
   };
 }
 
@@ -35,6 +65,7 @@ async function fetchGameAndLevels(gameId) {
   const levelIds = game.levelIds ?? [];
 
   const levelSnapshots = await Promise.all(
+    // NOTE: if your RTDB path is actually "Levels" not "level", change it here.
     levelIds.map((levelId) => db.ref(`level/${levelId}`).get())
   );
 
@@ -51,9 +82,6 @@ async function fetchGameAndLevels(gameId) {
 
   const { pin, ...safeGame } = game;
 
-  // ✅ optional debug: confirm tolerance arrived from DB
-  // console.log("[page] first level tolerance map:", levels?.[0]?.poseTolerancePctById);
-
   return {
     game: {
       id: gameId,
@@ -69,7 +97,6 @@ async function fetchGameAndLevels(gameId) {
 }
 
 export default async function Page({ params, searchParams }) {
-  // ✅ keep exactly how you had it
   const { id: gameId } = await params;
   const { level } = await searchParams;
 

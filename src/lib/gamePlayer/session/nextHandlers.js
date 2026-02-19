@@ -2,14 +2,46 @@
 
 import { STATE_TYPES, normalizeStateType } from "../states/_shared/stateTypes";
 
+// Accept 0..1 or 0..100; output 0..100
+function toPct(value) {
+  const t = Number(value);
+  if (!Number.isFinite(t)) return null;
+  return t <= 1 ? t * 100 : t;
+}
+
+function clampPct(v, fallback = 70) {
+  const n = toPct(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, n));
+}
+
+function getPoseThresholdPctForStep(node, stepIndex, fallback = 70) {
+  // 1) node.poseTolerances[stepIndex]
+  const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
+  const fromArray =
+    arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
+  if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
+    return clampPct(fromArray, fallback);
+  }
+
+  // 2) node.defaultTolerance / node.threshold
+  const nodeDefault = node?.defaultTolerance ?? node?.threshold;
+  if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") {
+    return clampPct(nodeDefault, fallback);
+  }
+
+  return fallback;
+}
+
 /**
  * NEXT handler factory.
  * Pure + deterministic.
  *
  * Supports:
  * - INTRO/OUTRO: dialogueIndex stepping
+ * - INTUITION: advance to next node (answer handled elsewhere)
  * - TWEEN: stepIndex over transitions (poseIds[i] -> poseIds[i+1])
- * - POSE_MATCH: stepIndex over poseIds targets
+ * - POSE_MATCH: stepIndex over poseIds targets (and updates poseMatch block)
  */
 export function createNextHandler({
   currentNode,
@@ -74,6 +106,26 @@ export function createNextHandler({
     return goNextNode(session, { reason: "NO_DIALOGUE_LINES" });
   }
 
+  function handleIntuitionNext(session) {
+    // Don’t let any auto timers accidentally double-advance
+    let s = cancelTimersByTag(session, "cursorDelay");
+    s = cancelTimersByTag(s, `auto:${session.nodeIndex}`);
+
+    s = pushEffect(s, {
+      type: "TELEMETRY_EVENT",
+      event: {
+        type: "INTUITION_NEXT",
+        at: s.time.now,
+        nodeIndex: s.nodeIndex,
+        stateType: STATE_TYPES.INTUITION,
+        // if your commands.next passes payload, you can store it in session elsewhere
+        answer: typeof s?.intuition?.answer === "boolean" ? s.intuition.answer : null,
+      },
+    });
+
+    return goNextNode(s, { reason: "INTUITION_ANSWERED" });
+  }
+
   function handleTweenNext(session) {
     const node = currentNode(session);
     const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
@@ -84,7 +136,11 @@ export function createNextHandler({
 
     // advance within same node
     if (i + 1 < transitions) {
-      const s = { ...session, stepIndex: i + 1 };
+      const nextStep = i + 1;
+      const fromPoseId = poseIds[nextStep]; // after increment, transition is (poseIds[nextStep] -> poseIds[nextStep+1])
+      const toPoseId = poseIds[nextStep + 1];
+
+      const s = { ...session, stepIndex: nextStep };
       return pushEffect(s, {
         type: "TELEMETRY_EVENT",
         event: {
@@ -93,8 +149,8 @@ export function createNextHandler({
           nodeIndex: s.nodeIndex,
           stateType: STATE_TYPES.TWEEN,
           stepIndex: s.stepIndex,
-          fromPoseId: poseIds[s.stepIndex],
-          toPoseId: poseIds[s.stepIndex + 1],
+          fromPoseId,
+          toPoseId,
         },
       });
     }
@@ -111,7 +167,26 @@ export function createNextHandler({
 
     // advance within same node
     if (i + 1 < poseIds.length) {
-      const s = { ...session, stepIndex: i + 1 };
+      const nextStep = i + 1;
+      const nextTargetPoseId = poseIds[nextStep] ?? null;
+      const nextThresholdPct = getPoseThresholdPctForStep(node, nextStep, 70);
+
+      const s = {
+        ...session,
+        stepIndex: nextStep,
+        flags: { ...session.flags, showCursor: false },
+        poseMatch: {
+          ...(session.poseMatch ?? {}),
+          overall: 0,
+          perSegment: [],
+          matched: false,
+          targetPoseId: nextTargetPoseId,
+          thresholdPct: nextThresholdPct,
+          stepIndex: nextStep,
+          updatedAt: session.time.now,
+        },
+      };
+
       return pushEffect(s, {
         type: "TELEMETRY_EVENT",
         event: {
@@ -120,7 +195,8 @@ export function createNextHandler({
           nodeIndex: s.nodeIndex,
           stateType: STATE_TYPES.POSE_MATCH,
           stepIndex: s.stepIndex,
-          targetPoseId: poseIds[s.stepIndex],
+          targetPoseId: nextTargetPoseId,
+          thresholdPct: nextThresholdPct,
         },
       });
     }
@@ -135,6 +211,7 @@ export function createNextHandler({
   const handlers = {
     [STATE_TYPES.INTRO]: handleDialogueLikeNext,
     [STATE_TYPES.OUTRO]: handleDialogueLikeNext,
+    [STATE_TYPES.INTUITION]: handleIntuitionNext,
     [STATE_TYPES.TWEEN]: handleTweenNext,
     [STATE_TYPES.POSE_MATCH]: handlePoseMatchNext,
   };

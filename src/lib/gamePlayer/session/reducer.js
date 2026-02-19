@@ -96,6 +96,7 @@ function emitTelemetry(session, evt) {
 /* ----------------------------- public API ----------------------------- */
 
 export function createInitialSession({ game, initialLevel = 0, playId = null }) {
+  console.log("reducer game log:  ", game);
   let session = createSession({
     game,
     playId,
@@ -200,6 +201,35 @@ export function applyCommand(session, name, payload) {
 
       return next;
     }
+
+    case "TRUE_FALSE_SELECTED": {
+      const answer = typeof payload?.answer === "boolean" ? payload.answer : null;
+
+      let next = {
+        ...session,
+        intuition: {
+          answer,
+          question: payload?.question ?? null,
+          levelId: payload?.levelId ?? session.levelId ?? null,
+          gameId: payload?.gameId ?? session.gameId ?? null,
+          nodeIndex: payload?.nodeIndex ?? session.nodeIndex ?? null,
+          levelIndex: payload?.levelIndex ?? session.levelIndex ?? null,
+          at: payload?.at ?? Date.now(),
+        },
+      };
+
+      next = emitTelemetry(next, {
+        type: "TRUE_FALSE_SELECTED",
+        at: next.time.now,
+        nodeIndex: next.nodeIndex,
+        stateType: nodeType(currentNode(next)),
+        answer,
+        question: next.intuition?.question,
+      });
+
+      return next;
+    }
+
 
     case "POSE_MATCH_SCORES": {
       const overall = Number(payload?.overall ?? 0);

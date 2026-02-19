@@ -4,17 +4,12 @@ import { normalizeStateType, STATE_TYPES } from "@/lib/gamePlayer/states/_shared
 import IntroView from "./states/Views/IntroView";
 import TweenView from "./states/Views/TweenView";
 import PoseMatchView from "./states/Views/PoseMatchView";
+import IntuitionView from "./states/Views/IntuitionView";
 import InsightView from "./states/Views/InsightView";
 import OutroView from "./states/Views/OutroView";
 
-export default function StateRenderer({
-  session,
-  dispatch,
-  poseDataRef,
-  width,
-  height,
-}) {
-  const node = session?.node;
+export default function StateRenderer({ session, dispatch, poseDataRef, width, height }) {
+  const node = session?.node ?? null;
   const type = normalizeStateType(node?.type ?? node?.state ?? null);
 
   switch (type) {
@@ -25,6 +20,20 @@ export default function StateRenderer({
           node={node}
           dispatch={dispatch}
           poseDataRef={poseDataRef}
+          width={width}
+          height={height}
+        />
+      );
+
+    case STATE_TYPES.INTUITION:
+      return (
+        <IntuitionView
+          session={session}
+          node={node}
+          dispatch={dispatch}
+          poseDataRef={poseDataRef}
+          width={width}
+          height={height}
         />
       );
 
@@ -71,6 +80,8 @@ export default function StateRenderer({
           node={node}
           dispatch={dispatch}
           poseDataRef={poseDataRef}
+          width={width}
+          height={height}
         />
       );
 
