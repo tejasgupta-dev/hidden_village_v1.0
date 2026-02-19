@@ -3,7 +3,6 @@
 import { createSession } from "./createSession";
 import { scheduleIn, cancelTimersByTag, runDueTimers } from "./timers";
 import { STATE_TYPES, normalizeStateType } from "../states/_shared/stateTypes";
-import { createNextHandler } from "./nextHandlers";
 
 function pushEffect(session, effect) {
   return { ...session, effects: [...(session.effects ?? []), effect] };
@@ -21,6 +20,44 @@ function isDialogueLikeType(t) {
   return t === STATE_TYPES.INTRO || t === STATE_TYPES.OUTRO;
 }
 
+function isSteppedPoseType(t) {
+  return t === STATE_TYPES.TWEEN || t === STATE_TYPES.POSE_MATCH;
+}
+
+/* ----------------------------- eventId helpers ----------------------------- */
+
+function baseEventId(session) {
+  const p = session?.playId ?? "noPlay";
+  const g = session?.gameId ?? "noGame";
+  const l = session?.levelId ?? "noLevel";
+  return `${p}:${g}:${l}`;
+}
+
+function withEventId(session, evt) {
+  if (evt?.eventId) return evt;
+
+  const t = evt?.type ?? "UNKNOWN";
+  const ni = evt?.nodeIndex ?? session?.nodeIndex ?? -1;
+  const st = evt?.stateType ?? nodeType(session?.node) ?? "unknown";
+  const di = evt?.dialogueIndex;
+  const si = evt?.stepIndex;
+
+  const parts = [baseEventId(session), t, `n${ni}`, `s${st}`];
+  if (di != null) parts.push(`d${di}`);
+  if (si != null) parts.push(`k${si}`);
+
+  return { ...evt, eventId: parts.join("|") };
+}
+
+function emitTelemetry(session, evt) {
+  return pushEffect(session, {
+    type: "TELEMETRY_EVENT",
+    event: withEventId(session, evt),
+  });
+}
+
+/* ----------------------------- public API ----------------------------- */
+
 export function createInitialSession({ game, initialLevel = 0, playId = null }) {
   let session = createSession({
     game,
@@ -29,15 +66,12 @@ export function createInitialSession({ game, initialLevel = 0, playId = null }) 
     initialNodeIndex: 0,
   });
 
-  session = pushEffect(session, {
-    type: "TELEMETRY_EVENT",
-    event: {
-      type: "SESSION_START",
-      at: session.time.now,
-      levelId: session.levelId,
-      gameId: session.gameId,
-      playId: session.playId,
-    },
+  session = emitTelemetry(session, {
+    type: "SESSION_START",
+    at: session.time.now,
+    levelId: session.levelId,
+    gameId: session.gameId,
+    playId: session.playId,
   });
 
   session = enterNode(session, session.nodeIndex, { reason: "INIT" });
@@ -87,14 +121,13 @@ export function applyCommand(session, name, payload) {
   switch (name) {
     case "PAUSE": {
       if (session.flags.paused) return session;
-      let next = {
+
+      const next = {
         ...session,
         flags: { ...session.flags, paused: true, showPauseMenu: true },
       };
-      return pushEffect(next, {
-        type: "TELEMETRY_EVENT",
-        event: { type: "PAUSE", at: session.time.now },
-      });
+
+      return emitTelemetry(next, { type: "PAUSE", at: session.time.now });
     }
 
     case "RESUME": {
@@ -105,10 +138,7 @@ export function applyCommand(session, name, payload) {
         flags: { ...session.flags, paused: false, showPauseMenu: false },
       };
 
-      next = pushEffect(next, {
-        type: "TELEMETRY_EVENT",
-        event: { type: "RESUME", at: session.time.now },
-      });
+      next = emitTelemetry(next, { type: "RESUME", at: session.time.now });
 
       next = scheduleCursorIfDialogueLike(next);
       return next;
@@ -127,9 +157,11 @@ export function applyCommand(session, name, payload) {
       const nextSettings = setByPath(session.settings, path, value);
       let next = { ...session, settings: nextSettings };
 
-      next = pushEffect(next, {
-        type: "TELEMETRY_EVENT",
-        event: { type: "SETTING_CHANGED", at: session.time.now, path, value },
+      next = emitTelemetry(next, {
+        type: "SETTING_CHANGED",
+        at: session.time.now,
+        path,
+        value,
       });
 
       return next;
@@ -167,24 +199,22 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     flags: { ...session.flags, showCursor: false },
   };
 
+  // Cancel node-scoped timers
   next = cancelTimersByTag(next, "cursorDelay");
   next = cancelTimersByTag(next, `auto:${nodeIndex}`);
 
-  if (isDialogueLikeType(t)) {
-    next = { ...next, dialogueIndex: 0 };
-  }
+  if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
+  if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
 
-  next = pushEffect(next, {
-    type: "TELEMETRY_EVENT",
-    event: {
-      type: "STATE_ENTER",
-      at: session.time.now,
-      nodeIndex,
-      stateType: t,
-      reason: reason ?? "UNKNOWN",
-    },
+  next = emitTelemetry(next, {
+    type: "STATE_ENTER",
+    at: session.time.now,
+    nodeIndex,
+    stateType: t,
+    reason: reason ?? "UNKNOWN",
   });
 
+  // Pose recording hint effect (not telemetry)
   next = pushEffect(next, {
     type: "POSE_RECORDING_HINT",
     enabled:
@@ -205,15 +235,12 @@ function exitNode(session, { reason } = {}) {
   const node = currentNode(session);
   const t = nodeType(node);
 
-  return pushEffect(session, {
-    type: "TELEMETRY_EVENT",
-    event: {
-      type: "STATE_EXIT",
-      at: session.time.now,
-      nodeIndex: session.nodeIndex,
-      stateType: t,
-      reason: reason ?? "UNKNOWN",
-    },
+  return emitTelemetry(session, {
+    type: "STATE_EXIT",
+    at: session.time.now,
+    nodeIndex: session.nodeIndex,
+    stateType: t,
+    reason: reason ?? "UNKNOWN",
   });
 }
 
@@ -223,9 +250,10 @@ function goNextNode(session, { reason } = {}) {
   if (nextIndex >= (session.levelStateNodes?.length ?? 0)) {
     let done = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
 
-    done = pushEffect(done, {
-      type: "TELEMETRY_EVENT",
-      event: { type: "LEVEL_COMPLETE", at: done.time.now, levelId: done.levelId },
+    done = emitTelemetry(done, {
+      type: "LEVEL_COMPLETE",
+      at: done.time.now,
+      levelId: done.levelId,
     });
 
     return pushEffect(done, { type: "ON_COMPLETE" });
@@ -236,31 +264,117 @@ function goNextNode(session, { reason } = {}) {
   return next;
 }
 
-/* ----------------------------- NEXT handler (pluggable) ----------------------------- */
+/* ----------------------------- NEXT logic ----------------------------- */
 
-const handleNext = createNextHandler({
-  currentNode,
-  nodeType,
-  pushEffect,
-  cancelTimersByTag,
-  scheduleCursorIfDialogueLike,
-  maybeScheduleAutoAdvance,
-  goNextNode,
-});
+function handleNext(session) {
+  const node = currentNode(session);
+  const t = nodeType(node);
+
+  // Dialogue stepping (intro/outro)
+  if (isDialogueLikeType(t)) {
+    const lines = node?.lines ?? node?.dialogues ?? [];
+    const nextDialogueIndex = (session.dialogueIndex ?? 0) + 1;
+
+    if (Array.isArray(lines) && lines.length > 0) {
+      let s = cancelTimersByTag(session, `auto:${session.nodeIndex}`);
+
+      if (nextDialogueIndex < lines.length) {
+        s = {
+          ...s,
+          dialogueIndex: nextDialogueIndex,
+          flags: { ...s.flags, showCursor: false },
+        };
+
+        s = cancelTimersByTag(s, "cursorDelay");
+
+        s = emitTelemetry(s, {
+          type: "DIALOGUE_NEXT",
+          at: s.time.now,
+          nodeIndex: s.nodeIndex,
+          stateType: t,
+          dialogueIndex: nextDialogueIndex,
+        });
+
+        s = scheduleCursorIfDialogueLike(s);
+        s = maybeScheduleAutoAdvance(s);
+        return s;
+      }
+
+      let s2 = emitTelemetry(session, {
+        type: "DIALOGUE_END",
+        at: session.time.now,
+        nodeIndex: session.nodeIndex,
+        stateType: t,
+      });
+
+      s2 = cancelTimersByTag(s2, "cursorDelay");
+      s2 = cancelTimersByTag(s2, `auto:${session.nodeIndex}`);
+
+      return goNextNode(s2, { reason: "DIALOGUE_FINISHED" });
+    }
+
+    return goNextNode(session, { reason: "NO_DIALOGUE_LINES" });
+  }
+
+  // Tween steps
+  if (t === STATE_TYPES.TWEEN) {
+    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+    const transitions = Math.max(0, poseIds.length - 1);
+    const i = session.stepIndex ?? 0;
+
+    if (transitions <= 0) return goNextNode(session, { reason: "TWEEN_EMPTY" });
+
+    if (i + 1 < transitions) {
+      const s = { ...session, stepIndex: i + 1 };
+      return emitTelemetry(s, {
+        type: "TWEEN_STEP",
+        at: s.time.now,
+        nodeIndex: s.nodeIndex,
+        stateType: t,
+        stepIndex: s.stepIndex,
+        fromPoseId: poseIds[s.stepIndex],
+        toPoseId: poseIds[s.stepIndex + 1],
+      });
+    }
+
+    return goNextNode(session, { reason: "TWEEN_FINISHED" });
+  }
+
+  // Pose match steps
+  if (t === STATE_TYPES.POSE_MATCH) {
+    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+    const i = session.stepIndex ?? 0;
+
+    if (poseIds.length <= 0) return goNextNode(session, { reason: "POSE_MATCH_EMPTY" });
+
+    if (i + 1 < poseIds.length) {
+      const s = { ...session, stepIndex: i + 1 };
+      return emitTelemetry(s, {
+        type: "POSE_MATCH_NEXT_TARGET",
+        at: s.time.now,
+        nodeIndex: s.nodeIndex,
+        stateType: t,
+        stepIndex: s.stepIndex,
+        targetPoseId: poseIds[s.stepIndex],
+      });
+    }
+
+    return goNextNode(session, { reason: "POSE_MATCH_FINISHED" });
+  }
+
+  return goNextNode(session, { reason: "NEXT_COMMAND" });
+}
 
 /* ----------------------------- Timers ----------------------------- */
 
 function applyTimer(session, timer) {
   switch (timer.kind) {
     case "SHOW_CURSOR": {
-      let next = { ...session, flags: { ...session.flags, showCursor: true } };
-      return pushEffect(next, {
-        type: "TELEMETRY_EVENT",
-        event: {
-          type: "CURSOR_SHOWN",
-          at: session.time.now,
-          nodeIndex: session.nodeIndex,
-        },
+      const next = { ...session, flags: { ...session.flags, showCursor: true } };
+      return emitTelemetry(next, {
+        type: "CURSOR_SHOWN",
+        at: session.time.now,
+        nodeIndex: session.nodeIndex,
       });
     }
 
@@ -282,7 +396,7 @@ function scheduleCursorIfDialogueLike(session) {
 
   const delayMS = node?.cursorDelayMS ?? session.settings?.cursor?.delayMS ?? 0;
 
-  let next = cancelTimersByTag(session, "cursorDelay");
+  const next = cancelTimersByTag(session, "cursorDelay");
 
   if (!delayMS || delayMS <= 0) {
     return { ...next, flags: { ...next.flags, showCursor: true } };
@@ -308,10 +422,18 @@ function maybeScheduleAutoAdvance(session) {
   const t = nodeType(node);
 
   if (isDialogueLikeType(t)) {
-    return scheduleIn(session, { tag, kind: "AUTO_NEXT", delayMS: autoMS });
+    return scheduleIn(session, {
+      tag,
+      kind: "AUTO_NEXT",
+      delayMS: autoMS,
+    });
   }
 
-  return scheduleIn(session, { tag, kind: "AUTO_ADVANCE", delayMS: autoMS });
+  return scheduleIn(session, {
+    tag,
+    kind: "AUTO_ADVANCE",
+    delayMS: autoMS,
+  });
 }
 
 /* ----------------------------- Settings util ----------------------------- */

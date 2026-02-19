@@ -1,197 +1,261 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
-import GetPoseData from "@/lib/mediapipe/getPoseData";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import getPoseData from "@/lib/mediapipe/getPoseData";
 import PoseDrawer from "@/lib/pose/poseDrawer";
-import { Camera, Circle, Play, StopCircle } from "lucide-react";
+import { Circle, Play, StopCircle } from "lucide-react";
+
+/** Make a deterministic signature for a poses map (keys sorted). */
+function posesSignature(map) {
+  if (!map || typeof map !== "object") return "";
+  const keys = Object.keys(map).sort();
+  let out = "";
+  for (const k of keys) {
+    const v = map[k];
+    // v is typically a JSON string already; keep as-is if string
+    out += `${k}:${typeof v === "string" ? v : JSON.stringify(v)}|`;
+  }
+  return out;
+}
+
+/** Convert incoming poses (stringified or object) into parsed objects. */
+function parseIncomingPoses(map) {
+  const incoming = map && typeof map === "object" ? map : {};
+  const parsed = {};
+  for (const [key, value] of Object.entries(incoming)) {
+    try {
+      parsed[key] = typeof value === "string" ? JSON.parse(value) : value;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("Error parsing pose:", key, e);
+    }
+  }
+  return parsed;
+}
+
+/** Convert parsed pose objects to JSON strings (for storage). */
+function stringifyPoses(parsedMap) {
+  const out = {};
+  for (const [k, v] of Object.entries(parsedMap || {})) {
+    try {
+      out[k] = typeof v === "string" ? v : JSON.stringify(v);
+    } catch {
+      // skip unserializable
+    }
+  }
+  return out;
+}
 
 export default function PoseCapture({ poses = {}, onPosesUpdate }) {
   const [capturedPoses, setCapturedPoses] = useState({});
   const [selectedPoseKey, setSelectedPoseKey] = useState(null);
   const [isTestMode, setIsTestMode] = useState(false);
   const [testResults, setTestResults] = useState(null);
-  
+
+  const [poseData, setPoseData] = useState(null);
   const videoRef = useRef(null);
 
-  // Video dimensions
+  // Keep track of latest "incoming" signature to prevent ping-pong syncing
+  const lastIncomingSigRef = useRef("");
+  // Keep track of last "outgoing" signature to avoid repeated sends
+  const lastSentSigRef = useRef("");
+
+  // Sizes
   const width = 640;
   const height = 480;
   const thumbnailWidth = 120;
   const thumbnailHeight = 90;
 
-  // Get pose data from camera
-  const { poseData, loading, error } = GetPoseData({ width, height });
+  /* -------------------- MediaPipe hook -------------------- */
 
-  // Load existing poses on mount
+  const handlePoseData = useCallback((data) => {
+    setPoseData(data ?? null);
+  }, []);
+
+  const { loading, error } = getPoseData({
+    videoRef,
+    width,
+    height,
+    onPoseData: handlePoseData,
+  });
+
+  /* -------------------- Parent -> Local hydrate (signature guarded) -------------------- */
+
+  const incomingSig = useMemo(() => posesSignature(poses), [poses]);
+
   useEffect(() => {
-    if (poses && Object.keys(poses).length > 0) {
-      const parsedPoses = {};
-      Object.entries(poses).forEach(([key, value]) => {
-        try {
-          parsedPoses[key] = typeof value === 'string' ? JSON.parse(value) : value;
-        } catch (e) {
-          console.error('Error parsing pose:', e);
-        }
-      });
-      setCapturedPoses(parsedPoses);
-    }
-  }, []); // Only on mount
+    // Only hydrate if content actually changed
+    if (incomingSig === lastIncomingSigRef.current) return;
 
-  // Capture current pose
-  const handleCapture = () => {
-    if (!poseData || !poseData.poseLandmarks) {
+    lastIncomingSigRef.current = incomingSig;
+
+    const parsed = parseIncomingPoses(poses);
+
+    setCapturedPoses(parsed);
+
+    // Clear selection if pose removed
+    if (selectedPoseKey && !parsed[selectedPoseKey]) {
+      setSelectedPoseKey(null);
+    }
+
+    // Reset test mode on external changes
+    setIsTestMode(false);
+    setTestResults(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSig]); // IMPORTANT: depend on sig, not poses object identity
+
+  /* -------------------- Local -> Parent sync (signature guarded) -------------------- */
+
+  const outgoingStringified = useMemo(() => stringifyPoses(capturedPoses), [capturedPoses]);
+  const outgoingSig = useMemo(() => posesSignature(outgoingStringified), [outgoingStringified]);
+
+  useEffect(() => {
+    if (typeof onPosesUpdate !== "function") return;
+
+    // If outgoing matches incoming, no need to update parent (prevents infinite loop)
+    if (outgoingSig === lastIncomingSigRef.current) return;
+
+    // Also avoid re-sending the exact same outgoing value repeatedly
+    if (outgoingSig === lastSentSigRef.current) return;
+
+    lastSentSigRef.current = outgoingSig;
+    onPosesUpdate(outgoingStringified);
+  }, [outgoingSig, outgoingStringified, onPosesUpdate]);
+
+  /* -------------------- Actions -------------------- */
+
+  const handleCapture = useCallback(() => {
+    if (!poseData?.poseLandmarks) {
       alert("No pose detected. Please ensure your camera is on and you're in frame.");
       return;
     }
 
-    const timestamp = Date.now();
-    const key = `pose_${timestamp}`;
-    
-    // Create a deep copy to avoid reference issues
-    const poseCopy = JSON.parse(JSON.stringify(poseData));
-    
-    const newPoses = {
-      ...capturedPoses,
-      [key]: poseCopy,
-    };
+    const key = `pose_${Date.now()}`;
+    const poseCopy = JSON.parse(JSON.stringify(poseData)); // deep copy
 
-    setCapturedPoses(newPoses);
-    
-    // Convert to JSON strings for storage
-    const stringifiedPoses = {};
-    Object.entries(newPoses).forEach(([k, v]) => {
-      stringifiedPoses[k] = JSON.stringify(v);
+    setCapturedPoses((prev) => ({ ...prev, [key]: poseCopy }));
+
+    // UX
+    setSelectedPoseKey((prev) => prev ?? key);
+    setIsTestMode(false);
+    setTestResults(null);
+  }, [poseData]);
+
+  const handleDelete = useCallback((key) => {
+    setCapturedPoses((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
     });
-    
-    onPosesUpdate(stringifiedPoses);
-  };
 
-  // Delete a captured pose
-  const handleDelete = (key) => {
-    const newPoses = { ...capturedPoses };
-    delete newPoses[key];
-    setCapturedPoses(newPoses);
+    setSelectedPoseKey((prev) => (prev === key ? null : prev));
+    setIsTestMode(false);
+    setTestResults(null);
+  }, []);
 
-    const stringifiedPoses = {};
-    Object.entries(newPoses).forEach(([k, v]) => {
-      stringifiedPoses[k] = JSON.stringify(v);
-    });
-    
-    onPosesUpdate(stringifiedPoses);
-    
-    // Clear selection if deleted pose was selected
-    if (selectedPoseKey === key) {
-      setSelectedPoseKey(null);
-    }
-  };
-
-  // View a captured pose
-  const handleView = (key) => {
+  const handleView = useCallback((key) => {
     setSelectedPoseKey(key);
     setIsTestMode(false);
-  };
+    setTestResults(null);
+  }, []);
 
-  // Test pose matching
-  const handleTestPose = () => {
-    if (!poseData || !poseData.poseLandmarks) {
+  const calculatePoseSimilarity = useCallback((pose1, pose2) => {
+    if (!pose1?.poseLandmarks || !pose2?.poseLandmarks) return 0;
+
+    const a = pose1.poseLandmarks;
+    const b = pose2.poseLandmarks;
+
+    let total = 0;
+    let count = 0;
+
+    // Key landmarks
+    const keyLandmarks = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+
+    for (const idx of keyLandmarks) {
+      if (!a[idx] || !b[idx]) continue;
+      const dx = a[idx].x - b[idx].x;
+      const dy = a[idx].y - b[idx].y;
+      total += Math.sqrt(dx * dx + dy * dy);
+      count++;
+    }
+
+    if (!count) return 0;
+
+    const avg = total / count;
+    const similarity = Math.max(0, Math.min(100, (1 - avg * 2) * 100));
+    return Math.round(similarity);
+  }, []);
+
+  const handleTestPose = useCallback(() => {
+    if (!poseData?.poseLandmarks) {
       alert("No current pose detected.");
       return;
     }
-
-    if (Object.keys(capturedPoses).length === 0) {
+    const keys = Object.keys(capturedPoses);
+    if (!keys.length) {
       alert("No poses to match against. Capture some poses first.");
       return;
     }
 
     setIsTestMode(true);
-    
-    // Calculate similarity
-    const results = Object.entries(capturedPoses).map(([key, pose]) => {
-      const similarity = calculatePoseSimilarity(poseData, pose);
-      return { key, similarity };
-    });
+    setSelectedPoseKey(null);
 
-    setTestResults(results.sort((a, b) => b.similarity - a.similarity));
-  };
+    const results = keys
+      .map((k) => ({
+        key: k,
+        similarity: calculatePoseSimilarity(poseData, capturedPoses[k]),
+      }))
+      .sort((x, y) => y.similarity - x.similarity);
 
-  // Basic pose similarity calculation
-  const calculatePoseSimilarity = (pose1, pose2) => {
-    if (!pose1.poseLandmarks || !pose2.poseLandmarks) return 0;
+    setTestResults(results);
+  }, [poseData, capturedPoses, calculatePoseSimilarity]);
 
-    const landmarks1 = pose1.poseLandmarks;
-    const landmarks2 = pose2.poseLandmarks;
+  /* -------------------- Derived -------------------- */
 
-    let totalDistance = 0;
-    let count = 0;
-
-    // Compare key landmarks
-    const keyLandmarks = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
-    
-    keyLandmarks.forEach(index => {
-      if (landmarks1[index] && landmarks2[index]) {
-        const dist = Math.sqrt(
-          Math.pow(landmarks1[index].x - landmarks2[index].x, 2) +
-          Math.pow(landmarks1[index].y - landmarks2[index].y, 2)
-        );
-        totalDistance += dist;
-        count++;
-      }
-    });
-
-    const avgDistance = totalDistance / count;
-    const similarity = Math.max(0, Math.min(100, (1 - avgDistance * 2) * 100));
-    
-    return Math.round(similarity);
-  };
-
-  // Get the pose to display (selected or live)
   const displayPose = useMemo(() => {
-    if (selectedPoseKey && capturedPoses[selectedPoseKey]) {
-      return capturedPoses[selectedPoseKey];
-    }
+    if (selectedPoseKey && capturedPoses[selectedPoseKey]) return capturedPoses[selectedPoseKey];
     return poseData;
   }, [selectedPoseKey, capturedPoses, poseData]);
+
+  const capturedCount = Object.keys(capturedPoses).length;
 
   return (
     <div className="bg-white rounded-lg border border-gray-300 p-4">
       <h2 className="text-sm font-bold text-gray-900 mb-3">Pose Capture Studio</h2>
 
       {/* Hidden video element for MediaPipe */}
-      <video
-        ref={videoRef}
-        className="input-video"
-        style={{ display: 'none' }}
-        playsInline
-      />
+      <video ref={videoRef} className="input-video" style={{ display: "none" }} playsInline muted />
 
       {loading ? (
         <div className="flex items-center justify-center h-64 bg-gray-100 rounded">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2" />
             <p className="text-sm text-gray-600">Starting camera...</p>
           </div>
         </div>
       ) : error ? (
         <div className="flex items-center justify-center h-64 bg-red-50 rounded">
           <div className="text-center">
-            <p className="text-sm text-red-600">Error: {error}</p>
+            <p className="text-sm text-red-600">Error: {String(error)}</p>
             <p className="text-xs text-gray-500 mt-2">Please check camera permissions</p>
           </div>
         </div>
       ) : (
         <>
-          {/* Live Preview or Selected Pose */}
+          {/* Preview */}
           <div className="mb-3">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-gray-700">
-                {selectedPoseKey 
+                {selectedPoseKey
                   ? `Viewing: ${selectedPoseKey}`
-                  : isTestMode 
-                    ? "Test Mode - Match Your Pose"
-                    : "Live Preview"}
+                  : isTestMode
+                  ? "Test Mode - Match Your Pose"
+                  : "Live Preview"}
               </h3>
+
               {selectedPoseKey && (
                 <button
+                  type="button"
                   onClick={() => setSelectedPoseKey(null)}
                   className="text-xs text-blue-600 hover:text-blue-700"
                 >
@@ -199,15 +263,10 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                 </button>
               )}
             </div>
-            
+
             <div className="border border-gray-300 rounded bg-gray-50 flex items-center justify-center overflow-hidden">
               {displayPose ? (
-                <PoseDrawer
-                  poseData={displayPose}
-                  width={width}
-                  height={height}
-                  similarityScores={[]}
-                />
+                <PoseDrawer poseData={displayPose} width={width} height={height} similarityScores={[]} />
               ) : (
                 <div className="h-96 flex items-center justify-center">
                   <p className="text-sm text-gray-500">No pose detected</p>
@@ -216,18 +275,20 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Actions */}
           <div className="flex gap-2 mb-3">
             <button
+              type="button"
               onClick={handleCapture}
-              disabled={!poseData}
+              disabled={!poseData?.poseLandmarks}
               className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               <Circle size={14} />
               Capture Pose
             </button>
-            
+
             <button
+              type="button"
               onClick={() => {
                 if (isTestMode) {
                   setIsTestMode(false);
@@ -236,10 +297,12 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                   handleTestPose();
                 }
               }}
-              disabled={!poseData || Object.keys(capturedPoses).length === 0}
-              className={`flex-1 px-3 py-2 text-white text-sm font-medium rounded flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                isTestMode ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
-              }`}
+              disabled={!poseData?.poseLandmarks || capturedCount === 0}
+              className={[
+                "flex-1 px-3 py-2 text-white text-sm font-medium rounded flex items-center justify-center gap-2",
+                "disabled:opacity-50 disabled:cursor-not-allowed",
+                isTestMode ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700",
+              ].join(" ")}
             >
               {isTestMode ? (
                 <>
@@ -255,7 +318,7 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
             </button>
           </div>
 
-          {/* Test Results */}
+          {/* Test results */}
           {isTestMode && testResults && (
             <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded">
               <h3 className="text-xs font-semibold text-gray-900 mb-2">Match Results:</h3>
@@ -263,11 +326,12 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                 {testResults.map(({ key, similarity }) => (
                   <div key={key} className="flex items-center justify-between text-xs">
                     <span className="text-gray-700 truncate flex-1">{key}</span>
-                    <span className={`font-semibold ml-2 ${
-                      similarity >= 80 ? 'text-green-600' : 
-                      similarity >= 50 ? 'text-yellow-600' : 
-                      'text-red-600'
-                    }`}>
+                    <span
+                      className={[
+                        "font-semibold ml-2",
+                        similarity >= 80 ? "text-green-600" : similarity >= 50 ? "text-yellow-600" : "text-red-600",
+                      ].join(" ")}
+                    >
                       {similarity}%
                     </span>
                   </div>
@@ -276,13 +340,13 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
             </div>
           )}
 
-          {/* Captured Poses Grid */}
+          {/* Captured poses grid */}
           <div>
             <h3 className="text-xs font-semibold text-gray-700 mb-2">
-              Captured Poses ({Object.keys(capturedPoses).length})
+              Captured Poses ({capturedCount})
             </h3>
-            
-            {Object.keys(capturedPoses).length === 0 ? (
+
+            {capturedCount === 0 ? (
               <p className="text-xs text-gray-500 text-center py-4">
                 No poses captured yet. Strike a pose and click Capture!
               </p>
@@ -291,34 +355,31 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                 {Object.entries(capturedPoses).map(([key, pose]) => (
                   <div
                     key={key}
-                    className={`border rounded p-2 cursor-pointer transition ${
-                      selectedPoseKey === key
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
+                    className={[
+                      "border rounded p-2 cursor-pointer transition",
+                      selectedPoseKey === key ? "border-blue-500 bg-blue-50" : "border-gray-300 hover:border-gray-400",
+                    ].join(" ")}
+                    onClick={() => handleView(key)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") handleView(key);
+                    }}
                   >
-                    <div 
-                      onClick={() => handleView(key)}
-                      className="mb-1 bg-gray-100 rounded flex items-center justify-center overflow-hidden"
-                    >
-                      <PoseDrawer
-                        poseData={pose}
-                        width={thumbnailWidth}
-                        height={thumbnailHeight}
-                        similarityScores={[]}
-                      />
+                    <div className="mb-1 bg-gray-100 rounded flex items-center justify-center overflow-hidden">
+                      <PoseDrawer poseData={pose} width={thumbnailWidth} height={thumbnailHeight} similarityScores={[]} />
                     </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-600 truncate">
-                        {key}
-                      </span>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-gray-600 truncate">{key}</span>
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDelete(key);
                         }}
-                        className="text-red-600 hover:text-red-700"
+                        className="text-red-600 hover:text-red-700 shrink-0"
+                        aria-label={`Delete ${key}`}
                       >
                         <span className="text-xs">✕</span>
                       </button>

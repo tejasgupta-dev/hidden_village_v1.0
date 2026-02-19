@@ -8,17 +8,19 @@ import { STATE_TYPES } from "@/lib/gamePlayer/states/_shared/stateTypes";
  * - level (game.levels[levelIndex]) -> poses map (object)
  *
  * We do NOT store stateNodes in Firebase.
+ *
+ * ✅ Behavior:
+ * - ONE TWEEN node for all poses (poseIds[])
+ * - ONE POSE_MATCH node for all poses (poseIds[])
  */
 
 function unwrapDoc(maybeDoc) {
   if (!maybeDoc) return { id: null, data: null };
 
-  // Firestore DocumentSnapshot: { id, data(): {...} }
   if (typeof maybeDoc?.data === "function") {
     return { id: maybeDoc?.id ?? null, data: maybeDoc.data() ?? null };
   }
 
-  // Some shapes: { id, data: {...} }
   if (
     maybeDoc?.data &&
     typeof maybeDoc.data === "object" &&
@@ -27,15 +29,10 @@ function unwrapDoc(maybeDoc) {
     return { id: maybeDoc?.id ?? null, data: maybeDoc.data };
   }
 
-  // Plain object
   return { id: maybeDoc?.id ?? null, data: maybeDoc };
 }
 
 function normalizeDialogueLines(raw) {
-  // Accept:
-  // - [{speaker, text}, ...]
-  // - ["hi", "there"]
-  // - { lines: [...] }
   if (!raw) return [];
   const arr = Array.isArray(raw)
     ? raw
@@ -55,8 +52,32 @@ function normalizeDialogueLines(raw) {
     .filter((x) => String(x.text ?? "").trim().length > 0);
 }
 
+function getPoseIds(level) {
+  const poses = level?.poses;
+  if (!poses) return [];
+
+  // If it ever becomes an array later, support that too
+  if (Array.isArray(poses)) {
+    return poses
+      .map((p) => p?.id ?? p?.poseId ?? p?.key ?? null)
+      .filter(Boolean);
+  }
+
+  if (typeof poses === "object") {
+    // stable ordering: sort by numeric suffix in "pose_<timestamp>"
+    return Object.keys(poses)
+      .filter(Boolean)
+      .sort((a, b) => {
+        const ta = Number(String(a).split("_")[1] ?? 0);
+        const tb = Number(String(b).split("_")[1] ?? 0);
+        return ta - tb;
+      });
+  }
+
+  return [];
+}
+
 function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
-  // prefer more specific > generic > settings
   if (nodeType === STATE_TYPES.INTRO) {
     return (
       storyLevel?.introCursorDelayMS ??
@@ -79,7 +100,6 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
     );
   }
 
-  // pose/tween
   return (
     storyLevel?.poseCursorDelayMS ??
     storyLevel?.cursorDelayMS ??
@@ -91,7 +111,6 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
 }
 
 function resolveAutoAdvanceMS({ storyLevel, level }, nodeType) {
-  // Optional per-line autoplay for dialogue-like nodes (Option A reducer auto-next)
   if (nodeType === STATE_TYPES.INTRO) {
     return (
       storyLevel?.introAutoAdvanceMS ??
@@ -101,6 +120,7 @@ function resolveAutoAdvanceMS({ storyLevel, level }, nodeType) {
       undefined
     );
   }
+
   if (nodeType === STATE_TYPES.OUTRO) {
     return (
       storyLevel?.outroAutoAdvanceMS ??
@@ -110,32 +130,8 @@ function resolveAutoAdvanceMS({ storyLevel, level }, nodeType) {
       undefined
     );
   }
-  return (
-    storyLevel?.autoAdvanceMS ??
-    level?.autoAdvanceMS ??
-    undefined
-  );
-}
 
-function getPoseIds(level) {
-  // DB format you showed: poses is an object map
-  // poses: { pose_1771...: "<json string>", ... }
-  const poses = level?.poses;
-
-  if (!poses) return [];
-
-  // If it ever becomes an array later, support that too
-  if (Array.isArray(poses)) {
-    return poses
-      .map((p) => p?.id ?? p?.poseId ?? p?.key ?? null)
-      .filter(Boolean);
-  }
-
-  if (typeof poses === "object") {
-    return Object.keys(poses).filter(Boolean);
-  }
-
-  return [];
+  return storyLevel?.autoAdvanceMS ?? level?.autoAdvanceMS ?? undefined;
 }
 
 export function buildStateNodesForLevel({
@@ -148,77 +144,63 @@ export function buildStateNodesForLevel({
 
   const nodes = [];
 
-  // Get per-level story entry: game.storyline[levelIndex]
   const storyLevel =
     Array.isArray(game?.storyline) ? game.storyline[levelIndex] ?? null : null;
 
-  // 1) INTRO (from game.storyline[levelIndex].intro)
+  // 1) INTRO
   const introLines = normalizeDialogueLines(storyLevel?.intro);
-
   if (introLines.length > 0) {
     nodes.push({
       type: STATE_TYPES.INTRO,
       lines: introLines,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.INTRO),
       autoAdvanceMS: resolveAutoAdvanceMS({ storyLevel, level }, STATE_TYPES.INTRO),
-
-      // optional debug
       levelId: level?.id ?? levelDocId ?? null,
       gameId: game?.id ?? gameDocId ?? null,
     });
   }
 
-  // 2) POSES (from level.poses map)
-  const poseIds = getPoseIds(level);
+  // 2) POSES
+  const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
+  const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  // Only add pose nodes if there are poses
-  for (let i = 0; i < poseIds.length; i++) {
-    const toPoseId = poseIds[i];
-    const fromPoseId = i > 0 ? poseIds[i - 1] : null;
-
-    const cursorDelayMS = resolveCursorDelayMS(
-      { storyLevel, level },
-      STATE_TYPES.POSE_MATCH
-    );
-
-    // Tween between poses (skip first) — only if STATE_TYPES.TWEEN exists
-    if (fromPoseId && STATE_TYPES.TWEEN) {
-      nodes.push({
-        type: STATE_TYPES.TWEEN,
-        fromPoseId,
-        toPoseId,
-        durationMS: level?.tweenDurationMS ?? storyLevel?.tweenDurationMS ?? 600,
-        easing: level?.tweenEasing ?? storyLevel?.tweenEasing ?? "easeInOut",
-        cursorDelayMS,
-        levelId: level?.id ?? levelDocId ?? null,
-      });
-    }
-
+  // ✅ ONE TWEEN node for all transitions (only if 2+ poses)
+  if (poseIds.length >= 2 && STATE_TYPES.TWEEN) {
     nodes.push({
-      type: STATE_TYPES.POSE_MATCH,
-      targetPoseId: toPoseId,
-      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 0.85,
+      type: STATE_TYPES.TWEEN,
+      poseIds,
+      stepDurationMS: level?.tweenDurationMS ?? storyLevel?.tweenDurationMS ?? 600,
+      easing: level?.tweenEasing ?? storyLevel?.tweenEasing ?? "easeInOut",
       cursorDelayMS,
-      durationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
-
       levelId: level?.id ?? levelDocId ?? null,
     });
   }
 
-  // 3) OUTRO (from game.storyline[levelIndex].outro)
-  const outroLines = normalizeDialogueLines(storyLevel?.outro);
+  // ✅ ONE POSE_MATCH node for all targets (only if 1+ poses)
+  if (poseIds.length >= 1) {
+    nodes.push({
+      type: STATE_TYPES.POSE_MATCH,
+      poseIds,
+      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 0.85,
+      cursorDelayMS,
+      stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
+      levelId: level?.id ?? levelDocId ?? null,
+    });
+  }
 
+  // 3) OUTRO
+  const outroLines = normalizeDialogueLines(storyLevel?.outro);
   if (outroLines.length > 0) {
     nodes.push({
       type: STATE_TYPES.OUTRO,
       lines: outroLines,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.OUTRO),
       autoAdvanceMS: resolveAutoAdvanceMS({ storyLevel, level }, STATE_TYPES.OUTRO),
-
       levelId: level?.id ?? levelDocId ?? null,
       gameId: game?.id ?? gameDocId ?? null,
     });
   }
 
+  console.log(nodes)
   return nodes;
 }

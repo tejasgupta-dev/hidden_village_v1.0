@@ -345,7 +345,13 @@ function GamePlayerInner({
       <div className="absolute inset-0 flex">
         {/* LEFT */}
         <div className="relative h-full" style={{ width: leftPanelWidth }}>
-          <StateRenderer session={session} dispatch={dispatch} poseDataRef={poseDataRef} />
+          <StateRenderer
+            session={session}
+            dispatch={dispatch}
+            poseDataRef={poseDataRef}
+            width={leftPanelWidth}
+            height={height}
+          />
         </div>
 
         {/* RIGHT */}

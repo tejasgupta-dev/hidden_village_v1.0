@@ -4,7 +4,12 @@ import { STATE_TYPES, normalizeStateType } from "../states/_shared/stateTypes";
 
 /**
  * NEXT handler factory.
- * Keeps reducer clean while still pure/deterministic.
+ * Pure + deterministic.
+ *
+ * Supports:
+ * - INTRO/OUTRO: dialogueIndex stepping
+ * - TWEEN: stepIndex over transitions (poseIds[i] -> poseIds[i+1])
+ * - POSE_MATCH: stepIndex over poseIds targets
  */
 export function createNextHandler({
   currentNode,
@@ -22,69 +27,116 @@ export function createNextHandler({
     const nextDialogueIndex = (session.dialogueIndex ?? 0) + 1;
 
     if (Array.isArray(lines) && lines.length > 0) {
-        let next = cancelTimersByTag(session, `auto:${session.nodeIndex}`);
+      let s = cancelTimersByTag(session, `auto:${session.nodeIndex}`);
 
-        if (nextDialogueIndex < lines.length) {
-        next = {
-            ...next,
-            dialogueIndex: nextDialogueIndex,
-            flags: { ...next.flags, showCursor: false },
+      if (nextDialogueIndex < lines.length) {
+        s = {
+          ...s,
+          dialogueIndex: nextDialogueIndex,
+          flags: { ...s.flags, showCursor: false },
         };
 
-        next = cancelTimersByTag(next, "cursorDelay");
+        s = cancelTimersByTag(s, "cursorDelay");
 
-        next = pushEffect(next, {
-            type: "TELEMETRY_EVENT",
-            event: {
+        s = pushEffect(s, {
+          type: "TELEMETRY_EVENT",
+          event: {
             type: "DIALOGUE_NEXT",
-            at: next.time.now,
-            nodeIndex: next.nodeIndex,
+            at: s.time.now,
+            nodeIndex: s.nodeIndex,
             stateType: t,
             dialogueIndex: nextDialogueIndex,
-            },
+          },
         });
 
-        next = scheduleCursorIfDialogueLike(next);
-        next = maybeScheduleAutoAdvance(next);
-        return next;
-        }
+        s = scheduleCursorIfDialogueLike(s);
+        s = maybeScheduleAutoAdvance(s);
+        return s;
+      }
 
-        next = pushEffect(next, {
+      // dialogue finished -> next node
+      let s2 = pushEffect(session, {
         type: "TELEMETRY_EVENT",
         event: {
-            type: "DIALOGUE_END",
-            at: next.time.now,
-            nodeIndex: next.nodeIndex,
-            stateType: t,
+          type: "DIALOGUE_END",
+          at: session.time.now,
+          nodeIndex: session.nodeIndex,
+          stateType: t,
         },
-        });
+      });
 
-        next = cancelTimersByTag(next, "cursorDelay");
-        next = cancelTimersByTag(next, `auto:${next.nodeIndex}`);
+      s2 = cancelTimersByTag(s2, "cursorDelay");
+      s2 = cancelTimersByTag(s2, `auto:${session.nodeIndex}`);
 
-        return goNextNode(next, { reason: "DIALOGUE_FINISHED" });
+      return goNextNode(s2, { reason: "DIALOGUE_FINISHED" });
     }
 
     return goNextNode(session, { reason: "NO_DIALOGUE_LINES" });
+  }
+
+  function handleTweenNext(session) {
+    const node = currentNode(session);
+    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+    const transitions = Math.max(0, poseIds.length - 1);
+    const i = session.stepIndex ?? 0;
+
+    if (transitions <= 0) return goNextNode(session, { reason: "TWEEN_EMPTY" });
+
+    // advance within same node
+    if (i + 1 < transitions) {
+      const s = { ...session, stepIndex: i + 1 };
+      return pushEffect(s, {
+        type: "TELEMETRY_EVENT",
+        event: {
+          type: "TWEEN_STEP",
+          at: s.time.now,
+          nodeIndex: s.nodeIndex,
+          stateType: STATE_TYPES.TWEEN,
+          stepIndex: s.stepIndex,
+          fromPoseId: poseIds[s.stepIndex],
+          toPoseId: poseIds[s.stepIndex + 1],
+        },
+      });
     }
+
+    return goNextNode(session, { reason: "TWEEN_FINISHED" });
+  }
+
+  function handlePoseMatchNext(session) {
+    const node = currentNode(session);
+    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+    const i = session.stepIndex ?? 0;
+
+    if (poseIds.length <= 0) return goNextNode(session, { reason: "POSE_MATCH_EMPTY" });
+
+    // advance within same node
+    if (i + 1 < poseIds.length) {
+      const s = { ...session, stepIndex: i + 1 };
+      return pushEffect(s, {
+        type: "TELEMETRY_EVENT",
+        event: {
+          type: "POSE_MATCH_NEXT_TARGET",
+          at: s.time.now,
+          nodeIndex: s.nodeIndex,
+          stateType: STATE_TYPES.POSE_MATCH,
+          stepIndex: s.stepIndex,
+          targetPoseId: poseIds[s.stepIndex],
+        },
+      });
+    }
+
+    return goNextNode(session, { reason: "POSE_MATCH_FINISHED" });
+  }
 
   function handleDefaultNext(session) {
     return goNextNode(session, { reason: "NEXT_COMMAND" });
   }
 
-  function handlePoseMatchNext(session) {
-    return goNextNode(session, { reason: "POSE_MATCH_NEXT" });
-  }
-
-  function handleTweenNext(session) {
-    return goNextNode(session, { reason: "TWEEN_NEXT" });
-  }
-
   const handlers = {
     [STATE_TYPES.INTRO]: handleDialogueLikeNext,
     [STATE_TYPES.OUTRO]: handleDialogueLikeNext,
-    [STATE_TYPES.POSE_MATCH]: handlePoseMatchNext,
     [STATE_TYPES.TWEEN]: handleTweenNext,
+    [STATE_TYPES.POSE_MATCH]: handlePoseMatchNext,
   };
 
   return function handleNext(session) {
