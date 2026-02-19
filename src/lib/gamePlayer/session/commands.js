@@ -5,9 +5,8 @@
  * Keeps UI components clean and consistent.
  *
  * Usage:
- *   import { commands } from "@/lib/gamePlayer/session/commands";
- *   dispatch(commands.next());
- *   dispatch(commands.pause());
+ *   dispatch(commands.next({ source: "click" }));
+ *   dispatch(commands.next({ source: "auto" }));
  */
 
 export const commands = Object.freeze({
@@ -22,9 +21,16 @@ export const commands = Object.freeze({
     type: "CONSUME_EFFECTS",
   }),
 
-  next: () => ({
+  /**
+   * NEXT command.
+   * payload.source:
+   *  - "click" => manual user click (must always advance)
+   *  - "auto"  => autoplay logic (may be gated by match rules)
+   */
+  next: (payload = { source: "click" }) => ({
     type: "COMMAND",
     name: "NEXT",
+    payload,
   }),
 
   pause: () => ({
@@ -42,11 +48,6 @@ export const commands = Object.freeze({
     name: "TOGGLE_SETTINGS",
   }),
 
-  /**
-   * Set a setting by dot-path, e.g.:
-   *   commands.setSetting("cursor.sensitivity", 1.8)
-   *   commands.setSetting("pose.enabled", false)
-   */
   setSetting: (path, value) => ({
     type: "COMMAND",
     name: "SET_SETTING",
@@ -58,12 +59,6 @@ export const commands = Object.freeze({
     name: "RESTART_LEVEL",
   }),
 
-  /**
-   * Optional: call when pose stream updates.
-   * I recommend NOT storing the full pose in reducer state
-   * (store pose in a ref in GamePlayerRoot), but this can be
-   * used for quality flags or "pose last seen" timestamps.
-   */
   poseUpdate: (poseMeta = {}) => ({
     type: "POSE_UPDATE",
     ...poseMeta,

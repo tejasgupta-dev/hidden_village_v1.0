@@ -181,7 +181,7 @@ export function buildStateNodesForLevel({
     nodes.push({
       type: STATE_TYPES.POSE_MATCH,
       poseIds,
-      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 0.85,
+      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 60,
       cursorDelayMS,
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
       levelId: level?.id ?? levelDocId ?? null,

@@ -305,7 +305,7 @@ function GamePlayerInner({
   const rightPanelWidth = Math.max(260, Math.floor(width * 0.28));
   const leftPanelWidth = width - rightPanelWidth;
 
-  // Dialogue overlay (for intro/outro)
+  // Dialogue overlay (for intro/outro) — kept here in case your StateRenderer uses it
   const dialogueText = (() => {
     if (!isDialogueLike(type)) return "";
     const lines = session.node?.lines ?? session.node?.dialogues ?? [];
@@ -318,6 +318,10 @@ function GamePlayerInner({
     const sp = session.node?.speaker;
     return sp?.name ?? sp ?? "";
   })();
+
+  // ✅ Similarity overlays only during POSE_MATCH
+  const rightSimilarityScores =
+    type === STATE_TYPES.POSE_MATCH ? (session.poseMatch?.perSegment ?? []) : [];
 
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
@@ -351,6 +355,9 @@ function GamePlayerInner({
             poseDataRef={poseDataRef}
             width={leftPanelWidth}
             height={height}
+            // leaving these in case your renderer uses them (safe even if ignored)
+            dialogueText={dialogueText}
+            speaker={speaker}
           />
         </div>
 
@@ -368,7 +375,7 @@ function GamePlayerInner({
               poseData={poseForDrawer}
               width={rightPanelWidth}
               height={height}
-              similarityScores={null}
+              similarityScores={rightSimilarityScores}
             />
           </div>
         </div>

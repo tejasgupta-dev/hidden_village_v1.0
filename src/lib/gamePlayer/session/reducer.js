@@ -22,10 +22,6 @@ function isDialogueLikeType(t) {
   return t === STATE_TYPES.INTRO || t === STATE_TYPES.OUTRO;
 }
 
-/* NOTE:
- * TWEEN is NOT "stepped" anymore — no click-per-transition.
- * Pose match can still be stepped via stepIndex.
- */
 function isSteppedPoseType(t) {
   return t === STATE_TYPES.POSE_MATCH;
 }
@@ -145,7 +141,6 @@ export function applyCommand(session, name, payload) {
 
       next = emitTelemetry(next, { type: "RESUME", at: session.time.now });
 
-      // cursor applies to ALL states
       next = scheduleCursor(next);
       return next;
     }
@@ -173,8 +168,31 @@ export function applyCommand(session, name, payload) {
       return next;
     }
 
+    case "POSE_MATCH_SCORES": {
+      const overall = Number(payload?.overall ?? 0);
+      const perSegment = Array.isArray(payload?.perSegment) ? payload.perSegment : [];
+      const thresholdPct = Number(payload?.thresholdPct ?? 70);
+      const targetPoseId = payload?.targetPoseId ?? null;
+      const stepIndex = Number.isFinite(Number(payload?.stepIndex)) ? Number(payload.stepIndex) : null;
+
+      const matched = overall >= thresholdPct;
+
+      return {
+        ...session,
+        poseMatch: {
+          overall,
+          perSegment,
+          thresholdPct,
+          matched,
+          targetPoseId,
+          stepIndex,
+          updatedAt: session.time.now,
+        },
+      };
+    }
+
     case "NEXT":
-      return handleNext(session);
+      return handleNext(session, payload);
 
     case "RESTART_LEVEL":
       return createInitialSession({
@@ -196,15 +214,10 @@ function currentNode(session) {
 
 function cancelNodeTimers(session, nodeIndex) {
   let s = session;
-
-  // cursor + default auto tag
   s = cancelTimersByTag(s, "cursorDelay");
   s = cancelTimersByTag(s, `auto:${nodeIndex}`);
-
-  // tween-specific tags
   s = cancelTimersByTag(s, `tween:${nodeIndex}:replay`);
   s = cancelTimersByTag(s, `tween:${nodeIndex}:finish`);
-
   return s;
 }
 
@@ -224,7 +237,21 @@ function enterNode(session, nodeIndex, { reason } = {}) {
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
 
-  // TWEEN replay counter (drives TweenView `key` to restart)
+  if (t === STATE_TYPES.POSE_MATCH) {
+    next = {
+      ...next,
+      poseMatch: {
+        overall: 0,
+        perSegment: [],
+        thresholdPct: 70,
+        matched: false,
+        targetPoseId: null,
+        stepIndex: 0,
+        updatedAt: next.time.now,
+      },
+    };
+  }
+
   if (t === STATE_TYPES.TWEEN) next = { ...next, tweenPlayIndex: 0 };
 
   next = emitTelemetry(next, {
@@ -235,7 +262,6 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     reason: reason ?? "UNKNOWN",
   });
 
-  // Pose recording hint effect (not telemetry)
   next = pushEffect(next, {
     type: "POSE_RECORDING_HINT",
     enabled:
@@ -246,7 +272,6 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     nodeIndex,
   });
 
-  // cursor applies to ALL states
   next = scheduleCursor(next);
   next = scheduleAutoAdvanceIfNeeded(next);
 
@@ -288,11 +313,14 @@ function goNextNode(session, { reason } = {}) {
 
 /* ----------------------------- NEXT logic ----------------------------- */
 
-function handleNext(session) {
+function handleNext(session, payload) {
   const node = currentNode(session);
   const t = nodeType(node);
 
-  // Dialogue stepping (intro/outro)
+  const source = payload?.source ?? "unknown"; // "click" | "auto"
+  const isManualClick = source === "click";
+
+  // Dialogue stepping
   if (isDialogueLikeType(t)) {
     const lines = node?.lines ?? node?.dialogues ?? [];
     const nextDialogueIndex = (session.dialogueIndex ?? 0) + 1;
@@ -334,7 +362,7 @@ function handleNext(session) {
     return goNextNode(session, { reason: "NO_DIALOGUE_LINES" });
   }
 
-  // ✅ TWEEN: autoplay; Next ends early (skip to next node)
+  // TWEEN: Next ends early
   if (t === STATE_TYPES.TWEEN) {
     let s = cancelNodeTimers(session, session.nodeIndex);
 
@@ -349,27 +377,58 @@ function handleNext(session) {
     return goNextNode(s, { reason: "TWEEN_SKIPPED" });
   }
 
-  // Pose match steps
+  // POSE_MATCH:
+  // ✅ manual click ALWAYS advances
+  // ✅ auto only advances if matched
   if (t === STATE_TYPES.POSE_MATCH) {
     const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
     const i = session.stepIndex ?? 0;
 
     if (poseIds.length <= 0) return goNextNode(session, { reason: "POSE_MATCH_EMPTY" });
 
-    if (i + 1 < poseIds.length) {
-      const s = { ...session, stepIndex: i + 1 };
+    const matched = !!session.poseMatch?.matched;
 
-      return emitTelemetry(s, {
-        type: "POSE_MATCH_NEXT_TARGET",
+    if (!isManualClick && !matched) {
+      // auto path blocked unless matched
+      return session;
+    }
+
+    if (i + 1 < poseIds.length) {
+      const nextStep = i + 1;
+      const nextTargetPoseId = poseIds[nextStep] ?? null;
+
+      let s = {
+        ...session,
+        stepIndex: nextStep,
+        flags: { ...session.flags, showCursor: false },
+        poseMatch: {
+          ...(session.poseMatch ?? {}),
+          overall: 0,
+          perSegment: [],
+          matched: false,
+          targetPoseId: nextTargetPoseId,
+          thresholdPct: session.poseMatch?.thresholdPct ?? 70,
+          stepIndex: nextStep,
+          updatedAt: session.time.now,
+        },
+      };
+
+      s = emitTelemetry(s, {
+        type: isManualClick ? "POSE_MATCH_CLICK_NEXT" : "POSE_MATCH_AUTO_NEXT",
         at: s.time.now,
         nodeIndex: s.nodeIndex,
         stateType: t,
         stepIndex: s.stepIndex,
-        targetPoseId: poseIds[s.stepIndex],
+        targetPoseId: nextTargetPoseId,
       });
+
+      s = scheduleCursor(s);
+      return s;
     }
 
-    return goNextNode(session, { reason: "POSE_MATCH_FINISHED" });
+    return goNextNode(session, {
+      reason: isManualClick ? "POSE_MATCH_CLICK_FINISH" : "POSE_MATCH_AUTO_FINISH",
+    });
   }
 
   return goNextNode(session, { reason: "NEXT_COMMAND" });
@@ -389,20 +448,20 @@ function applyTimer(session, timer) {
     }
 
     case "AUTO_NEXT":
-      return handleNext(session);
+      // ✅ auto-advance should not bypass match rules
+      return handleNext(session, { source: "auto" });
 
     case "AUTO_ADVANCE":
       return goNextNode(session, { reason: "AUTO_ADVANCE" });
 
-    // ✅ TWEEN replay: bumps play index so TweenView can restart via `key`
     case "TWEEN_REPLAY": {
       const nextPlayIndex = (session.tweenPlayIndex ?? 0) + 1;
       const next = { ...session, tweenPlayIndex: nextPlayIndex };
 
       return emitTelemetry(next, {
         type: "TWEEN_REPLAY",
-        at: session.time.now,
-        nodeIndex: session.nodeIndex,
+        at: next.time.now,
+        nodeIndex: next.nodeIndex,
         playIndex: nextPlayIndex,
       });
     }
@@ -412,12 +471,8 @@ function applyTimer(session, timer) {
   }
 }
 
-/**
- * Cursor scheduling for ALL states.
- * - uses node.cursorDelayMS if present
- * - falls back to session.settings.cursor.delayMS
- * - 0/undefined => show immediately
- */
+/* ----------------------------- cursor scheduling ----------------------------- */
+
 function scheduleCursor(session) {
   const node = currentNode(session);
   if (!node) return session;
@@ -436,74 +491,14 @@ function scheduleCursor(session) {
   });
 }
 
-/* ----------------------------- tween scheduling ----------------------------- */
+/* ----------------------------- auto scheduling ----------------------------- */
 
-function getTweenLoops(session, node) {
-  const n =
-    node?.tweenLoops ??
-    node?.loops ??
-    node?.loopCount ??
-    session.settings?.tween?.loops ??
-    10;
-
-  const asInt = Number.isFinite(Number(n)) ? Math.floor(Number(n)) : 1;
-  return Math.max(1, asInt);
-}
-
-function getTweenOnePlayMS(node) {
-  const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
-  const transitions = Math.max(0, poseIds.length - 1);
-  const stepDurationMS = node?.stepDurationMS ?? 600; // per segment
-  return transitions * stepDurationMS;
-}
-
-/**
- * Auto-advance scheduling.
- * - Dialogue: uses node.autoAdvanceMS/durationMS to call NEXT (advance dialogue)
- * - Normal states: uses node.autoAdvanceMS/durationMS to ADVANCE node
- * - TWEEN: reducer controls finite loop count; schedules replay timers and final node advance.
- */
 function scheduleAutoAdvanceIfNeeded(session) {
   const node = currentNode(session);
   if (!node) return session;
 
   const t = nodeType(node);
 
-  // ✅ TWEEN: schedule replay(s) + finish based on tweenLoops
-  if (t === STATE_TYPES.TWEEN) {
-    const onePlayMS = getTweenOnePlayMS(node);
-    if (!onePlayMS || onePlayMS <= 0) return session;
-
-    const loops = getTweenLoops(session, node);
-    const playIndex = session.tweenPlayIndex ?? 0;
-
-    const replayTag = `tween:${session.nodeIndex}:replay`;
-    const finishTag = `tween:${session.nodeIndex}:finish`;
-
-    const hasReplay = (session.timers ?? []).some((tm) => tm.tag === replayTag);
-    const hasFinish = (session.timers ?? []).some((tm) => tm.tag === finishTag);
-
-    // We schedule ONE timer at a time.
-    // If we still owe replays, schedule next replay.
-    if (playIndex + 1 < loops) {
-      if (hasReplay || hasFinish) return session;
-      return scheduleIn(session, {
-        tag: replayTag,
-        kind: "TWEEN_REPLAY",
-        delayMS: onePlayMS,
-      });
-    }
-
-    // Last play: schedule finish to go next node after it completes
-    if (hasFinish || hasReplay) return session;
-    return scheduleIn(session, {
-      tag: finishTag,
-      kind: "AUTO_ADVANCE",
-      delayMS: onePlayMS,
-    });
-  }
-
-  // Default (non-tween) auto behavior
   const tag = `auto:${session.nodeIndex}`;
   if ((session.timers ?? []).some((tm) => tm.tag === tag)) return session;
 
