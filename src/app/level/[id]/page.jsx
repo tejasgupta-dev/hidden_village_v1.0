@@ -1,11 +1,25 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { Check, X, Plus, Trash2, Camera } from "lucide-react";
 import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
 import PoseCapture from "@/components/Pose/poseCapture";
+
+function clamp(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function asObject(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
 
 export default function LevelEditPage() {
   const params = useParams();
@@ -38,6 +52,23 @@ export default function LevelEditPage() {
   // suppress sessionStorage PIN being re-displayed after local remove
   const [ignoreStoredPin, setIgnoreStoredPin] = useState(false);
 
+  // ---- robust computed views (avoid undefined everywhere)
+  const safeLevel = level ?? {};
+  const options = useMemo(() => asArray(safeLevel.options), [safeLevel.options]);
+  const answers = useMemo(() => asArray(safeLevel.answers), [safeLevel.answers]);
+  const poses = useMemo(() => asObject(safeLevel.poses), [safeLevel.poses]);
+
+  // True/False gate fields (clean + explicit)
+  const tfEnabled = !!safeLevel.trueFalseEnabled;
+  const tfAnswer =
+    typeof safeLevel.trueFalseAnswer === "boolean" ? safeLevel.trueFalseAnswer : null;
+
+  // Pose tolerance map: poseId -> 0..100
+  const poseTolerancePctById = useMemo(
+    () => asObject(safeLevel.poseTolerancePctById),
+    [safeLevel.poseTolerancePctById]
+  );
+
   /* ------------------ PIN SYNC (don’t overwrite while typing) ------------------ */
   useEffect(() => {
     if (!level) return;
@@ -68,7 +99,7 @@ export default function LevelEditPage() {
 
   const handleRemovePin = () => {
     setLevel((prev) => ({
-      ...prev,
+      ...(prev ?? {}),
       pin: "",
       pinDirty: true, // ✅ mark intent to remove
     }));
@@ -87,6 +118,48 @@ export default function LevelEditPage() {
 
   if (!level) return null;
 
+  // ---- helpers that never explode on undefined prev
+  const setField = (key, value) => {
+    setLevel((prev) => ({ ...(prev ?? {}), [key]: value }));
+  };
+
+  const setTFEnabled = (enabled) => {
+    setLevel((prev) => ({
+      ...(prev ?? {}),
+      trueFalseEnabled: !!enabled,
+      // if turning on and answer missing, keep null (explicit)
+      // if turning off, clear answer to avoid ambiguity
+      trueFalseAnswer: enabled ? (typeof prev?.trueFalseAnswer === "boolean" ? prev.trueFalseAnswer : null) : null,
+    }));
+  };
+
+  const setTFAnswer = (valueBool) => {
+    setLevel((prev) => ({
+      ...(prev ?? {}),
+      trueFalseEnabled: true,
+      trueFalseAnswer: !!valueBool,
+    }));
+  };
+
+  const setPoseToleranceForId = (poseId, value) => {
+    const pct = clamp(value, 0, 100);
+    setLevel((prev) => ({
+      ...(prev ?? {}),
+      poseTolerancePctById: {
+        ...asObject(prev?.poseTolerancePctById),
+        [poseId]: pct,
+      },
+    }));
+  };
+
+  const removePoseToleranceForId = (poseId) => {
+    setLevel((prev) => {
+      const nextMap = { ...asObject(prev?.poseTolerancePctById) };
+      delete nextMap[poseId];
+      return { ...(prev ?? {}), poseTolerancePctById: nextMap };
+    });
+  };
+
   return (
     <div className="max-w-6xl mx-auto p-4">
       <h1 className="text-2xl font-bold mb-4">Edit Level</h1>
@@ -101,8 +174,8 @@ export default function LevelEditPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Level Name *</label>
         <input
-          value={level.name || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, name: e.target.value }))}
+          value={safeLevel.name ?? ""}
+          onChange={(e) => setField("name", e.target.value)}
           placeholder="Enter level name"
           className="border p-2 w-full rounded"
         />
@@ -112,8 +185,8 @@ export default function LevelEditPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Keywords</label>
         <input
-          value={level.keywords || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, keywords: e.target.value }))}
+          value={safeLevel.keywords ?? ""}
+          onChange={(e) => setField("keywords", e.target.value)}
           placeholder="puzzle, challenge, easy"
           className="border p-2 w-full rounded"
         />
@@ -123,10 +196,8 @@ export default function LevelEditPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Description</label>
         <textarea
-          value={level.description || ""}
-          onChange={(e) =>
-            setLevel((prev) => ({ ...prev, description: e.target.value }))
-          }
+          value={safeLevel.description ?? ""}
+          onChange={(e) => setField("description", e.target.value)}
           placeholder="Describe this level..."
           className="border p-2 w-full rounded"
           rows={3}
@@ -137,12 +208,66 @@ export default function LevelEditPage() {
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1">Question</label>
         <textarea
-          value={level.question || ""}
-          onChange={(e) => setLevel((prev) => ({ ...prev, question: e.target.value }))}
+          value={safeLevel.question ?? ""}
+          onChange={(e) => setField("question", e.target.value)}
           placeholder="What question should players answer?"
           className="border p-2 w-full rounded"
           rows={2}
         />
+      </div>
+
+      {/* TRUE/FALSE GATE */}
+      <div className="mb-6">
+        <label className="block text-sm font-medium mb-2">True/False Gate</label>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={tfEnabled}
+              onChange={(e) => setTFEnabled(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">Ask True/False first</span>
+          </label>
+
+          {tfEnabled && (
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="tfAnswer"
+                  checked={tfAnswer === true}
+                  onChange={() => setTFAnswer(true)}
+                />
+                <span className="text-sm">True</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="tfAnswer"
+                  checked={tfAnswer === false}
+                  onChange={() => setTFAnswer(false)}
+                />
+                <span className="text-sm">False</span>
+              </label>
+
+              <button
+                type="button"
+                className="text-xs text-gray-600 underline"
+                onClick={() => setField("trueFalseAnswer", null)}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+
+        <p className="text-xs text-gray-500 mt-2">
+          If enabled, the player answers True/False first. Then they can proceed to the options
+          question (if you still want multiple-choice selection after the T/F gate).
+        </p>
       </div>
 
       {/* PIN */}
@@ -154,7 +279,7 @@ export default function LevelEditPage() {
             <input
               ref={pinRef}
               type="text"
-              value={pinValue}
+              value={pinValue ?? ""}
               onChange={(e) => setPinValue(e.target.value)}
               placeholder="Enter PIN (min 4 characters)"
               className="border p-2 flex-1 rounded font-mono"
@@ -164,7 +289,7 @@ export default function LevelEditPage() {
               type="button"
               onClick={() => {
                 setLevel((prev) => ({
-                  ...prev,
+                  ...(prev ?? {}),
                   pin: pinValue,
                   pinDirty: true, // ✅ mark intent to set/change
                 }));
@@ -242,7 +367,7 @@ export default function LevelEditPage() {
       </div>
 
       {/* POSES */}
-      <div className="mb-4">
+      <div className="mb-6">
         <label className="block text-sm font-medium mb-2">Poses</label>
 
         <button
@@ -257,47 +382,104 @@ export default function LevelEditPage() {
         {showPoseCapture && (
           <div className="mb-3">
             <PoseCapture
-              poses={level.poses || {}}
-              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
+              poses={poses}
+              onPosesUpdate={(nextPoses) =>
+                setLevel((prev) => ({ ...(prev ?? {}), poses: nextPoses }))
+              }
             />
           </div>
         )}
 
-        {level.poses && Object.keys(level.poses).length > 0 && (
+        {poses && Object.keys(poses).length > 0 && (
           <div className="space-y-2">
-            {Object.entries(level.poses).map(([key, val]) => (
-              <div key={key} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-600 w-32 truncate">{key}:</span>
-                <input
-                  value={typeof val === "string" ? val : JSON.stringify(val)}
-                  disabled
-                  className="border p-2 flex-1 bg-gray-50 rounded text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => removePose(key)}
-                  className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
+            {Object.entries(poses).map(([poseId, val]) => {
+              const tolerance = Number.isFinite(Number(poseTolerancePctById[poseId]))
+                ? Number(poseTolerancePctById[poseId])
+                : "";
+
+              return (
+                <div key={poseId} className="flex flex-col gap-2 border rounded-xl p-3 bg-white">
+                  <div className="flex gap-2 items-center">
+                    <span className="text-sm text-gray-600 w-40 truncate">
+                      {poseId}:
+                    </span>
+
+                    <input
+                      value={typeof val === "string" ? val : JSON.stringify(val)}
+                      disabled
+                      className="border p-2 flex-1 bg-gray-50 rounded text-sm"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => removePose(poseId)}
+                      className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700"
+                      title="Remove pose"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+
+                  {/* Per-pose tolerance */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="text-xs text-gray-600 w-40">
+                      Tolerance (% match)
+                    </div>
+
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={tolerance}
+                      onChange={(e) =>
+                        setPoseToleranceForId(poseId, e.target.value === "" ? 0 : e.target.value)
+                      }
+                      placeholder="(default)"
+                      className="border p-2 w-32 rounded text-sm"
+                    />
+
+                    <div className="text-xs text-gray-500">
+                      0–100 (higher = harder)
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removePoseToleranceForId(poseId)}
+                      className="text-xs text-gray-600 underline"
+                      title="Use default tolerance"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
+
+        {!poses || Object.keys(poses).length === 0 ? (
+          <p className="text-gray-500 text-sm">No poses captured yet</p>
+        ) : null}
+
+        <p className="text-xs text-gray-500 mt-2">
+          Pose tolerance is stored separately as <span className="font-mono">poseTolerancePctById</span>{" "}
+          so you don’t have to mutate pose JSON blobs.
+        </p>
       </div>
 
       {/* OPTIONS & ANSWERS */}
       <div className="mb-6">
         <label className="block text-sm font-medium mb-2">Options & Answers</label>
 
-        {level.options && level.options.length > 0 ? (
+        {options.length > 0 ? (
           <div className="space-y-2 mb-3">
-            {level.options.map((opt, i) => (
+            {options.map((opt, i) => (
               <div key={i} className="flex gap-2 items-center">
                 <span className="text-sm text-gray-600 w-8">{i + 1}.</span>
 
                 <input
-                  value={opt || ""}
+                  value={opt ?? ""}
                   onChange={(e) => updateOption(i, e.target.value)}
                   placeholder={`Option ${i + 1}`}
                   className="border p-2 flex-1 rounded"
@@ -306,7 +488,8 @@ export default function LevelEditPage() {
                 <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap">
                   <input
                     type="checkbox"
-                    checked={level.answers && level.answers.includes(i)}
+                    // ✅ never undefined -> controlled forever
+                    checked={answers.includes(i)}
                     onChange={() => toggleAnswer(i)}
                     className="w-4 h-4"
                   />
@@ -375,7 +558,7 @@ export default function LevelEditPage() {
         </button>
 
         <div className="ml-auto text-sm text-gray-600">
-          Status: {level.isPublished ? "✅ Published" : "📝 Draft"}
+          Status: {safeLevel.isPublished ? "✅ Published" : "📝 Draft"}
         </div>
       </div>
     </div>

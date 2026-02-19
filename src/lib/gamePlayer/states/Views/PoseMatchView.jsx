@@ -3,10 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import PoseDrawer from "@/lib/pose/poseDrawer";
-import {
-  matchSegmentToLandmarks,
-  segmentSimilarity,
-} from "@/lib/pose/poseDrawerHelper";
+import { matchSegmentToLandmarks, segmentSimilarity } from "@/lib/pose/poseDrawerHelper";
 import { enrichLandmarks } from "@/lib/pose/landmark";
 
 function DefaultSpeakerSprite() {
@@ -42,10 +39,16 @@ function nowMS() {
 }
 
 // Accept 0..1 or 0..100; output 0..100
-function toPct(value, fallback) {
+function toPct(value) {
   const t = Number(value);
-  if (!Number.isFinite(t)) return fallback;
+  if (!Number.isFinite(t)) return null;
   return t <= 1 ? t * 100 : t;
+}
+
+function clampPct(v, fallback = 70) {
+  const n = toPct(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, n));
 }
 
 export default function PoseMatchView({
@@ -56,14 +59,16 @@ export default function PoseMatchView({
   width = 800,
   height = 600,
 }) {
-  // Minimum time to show each pose before user can click Next or auto-advance can fire
   const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 5000));
 
+  const level = useMemo(() => {
+    return session?.game?.levels?.[session?.levelIndex] ?? null;
+  }, [session?.game, session?.levelIndex]);
+
   const poseMap = useMemo(() => {
-    const level = session?.game?.levels?.[session?.levelIndex] ?? null;
     const poses = level?.poses ?? null;
     return poses && typeof poses === "object" ? poses : null;
-  }, [session?.game, session?.levelIndex]);
+  }, [level]);
 
   const poseIds = useMemo(
     () => (Array.isArray(node?.poseIds) ? node.poseIds : []),
@@ -79,24 +84,46 @@ export default function PoseMatchView({
   }, [poseMap, targetPoseId]);
 
   /**
-   * Per-pose tolerance priority (0..100):
-   * 1) pose json: tolerance/tolerancePct/threshold
-   * 2) node.poseTolerances[stepIndex]
-   * 3) node.defaultTolerance or node.threshold
-   * 4) fallback 70
+   * ✅ FIXED tolerance priority (0..100):
+   * 1) node.poseTolerances[stepIndex]   (your editor mapping)
+   * 2) level.poseTolerancePctById[targetPoseId]  (extra safety if mapping missing)
+   * 3) node.defaultTolerance || node.threshold
+   * 4) pose json tolerance fields (LAST so they can't override editor)
+   * 5) fallback 70
    */
   const thresholdPct = useMemo(() => {
+    // 1) node.poseTolerances
+    const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
+    const fromArray =
+      arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
+    if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
+      return clampPct(fromArray, 70);
+    }
+
+    // 2) level.poseTolerancePctById
+    const map = level?.poseTolerancePctById;
+    if (map && typeof map === "object" && targetPoseId) {
+      const fromMap = map[targetPoseId];
+      if (fromMap !== undefined && fromMap !== null && fromMap !== "") {
+        return clampPct(fromMap, 70);
+      }
+    }
+
+    // 3) node default
+    const nodeDefault = node?.defaultTolerance ?? node?.threshold;
+    if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") {
+      return clampPct(nodeDefault, 70);
+    }
+
+    // 4) pose json (last)
     const poseSpecific =
       targetPose?.tolerancePct ?? targetPose?.tolerance ?? targetPose?.threshold;
+    if (poseSpecific !== undefined && poseSpecific !== null && poseSpecific !== "") {
+      return clampPct(poseSpecific, 70);
+    }
 
-    const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
-    const fromArray = arr ? arr[stepIndex] : undefined;
-
-    const nodeDefault = node?.defaultTolerance ?? node?.threshold;
-
-    const v = toPct(poseSpecific, toPct(fromArray, toPct(nodeDefault, 70)));
-    return Math.max(0, Math.min(100, v));
-  }, [targetPose, node, stepIndex]);
+    return 70;
+  }, [node, stepIndex, level, targetPoseId, targetPose]);
 
   /* ----------------------------- hold gate ----------------------------- */
 
@@ -128,7 +155,6 @@ export default function PoseMatchView({
 
       const live = poseDataRef?.current ?? null;
 
-      // If either side missing, publish zeros
       if (!live?.poseLandmarks || !targetPose?.poseLandmarks) {
         dispatch({
           type: "COMMAND",
@@ -148,26 +174,14 @@ export default function PoseMatchView({
       const enrichedTarget = enrichLandmarks(targetPose);
 
       const perSegment = MATCH_CONFIG.map((cfg) => {
-        const playerSeg = matchSegmentToLandmarks(cfg, enrichedLive, {
-          width: 400,
-          height: 600,
-        });
-        const modelSeg = matchSegmentToLandmarks(cfg, enrichedTarget, {
-          width: 400,
-          height: 600,
-        });
-        const score =
-          playerSeg && modelSeg ? segmentSimilarity(playerSeg, modelSeg) : 0;
+        const playerSeg = matchSegmentToLandmarks(cfg, enrichedLive, { width: 400, height: 600 });
+        const modelSeg = matchSegmentToLandmarks(cfg, enrichedTarget, { width: 400, height: 600 });
+        const score = playerSeg && modelSeg ? segmentSimilarity(playerSeg, modelSeg) : 0;
         return { segment: cfg.segment, similarityScore: score };
       });
 
-      const valid = perSegment
-        .map((s) => s.similarityScore)
-        .filter((v) => Number.isFinite(v));
-
-      const overall = valid.length
-        ? valid.reduce((a, b) => a + b, 0) / valid.length
-        : 0;
+      const valid = perSegment.map((s) => s.similarityScore).filter((v) => Number.isFinite(v));
+      const overall = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
 
       dispatch({
         type: "COMMAND",
@@ -183,14 +197,13 @@ export default function PoseMatchView({
   }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex]);
 
   /* ----------------------------- reducer truth ----------------------------- */
-  // ✅ Core fix: always use reducer state for matched/overall (no simRef race)
+
   const overall = Number(session.poseMatch?.overall ?? 0);
   const matched = !!session.poseMatch?.matched;
   const effectiveThreshold = Number(session.poseMatch?.thresholdPct ?? thresholdPct);
 
   /* ----------------------------- advancing ----------------------------- */
 
-  // Auto-advance once per step when matched, but ONLY after holdDone
   const didAutoAdvanceRef = useRef(false);
   useEffect(() => {
     didAutoAdvanceRef.current = false;
@@ -199,8 +212,6 @@ export default function PoseMatchView({
   useEffect(() => {
     if (!targetPoseId) return;
     if (!holdDone) return;
-
-    // ✅ use reducer truth to match reducer gating
     if (!matched) return;
 
     if (didAutoAdvanceRef.current) return;
@@ -209,7 +220,6 @@ export default function PoseMatchView({
     dispatch(commands.next({ source: "auto" }));
   }, [targetPoseId, holdDone, matched, dispatch]);
 
-  // Manual Next: after holdDone, always advance (override)
   const onNext = () => {
     if (!holdDone) return;
     dispatch(commands.next({ source: "click" }));
@@ -219,7 +229,6 @@ export default function PoseMatchView({
     <div className="absolute inset-0 z-20 pointer-events-auto">
       <div className="absolute inset-0 bg-black/30" />
 
-      {/* LEFT: target pose */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="rounded-3xl bg-black/40 ring-1 ring-white/10 p-4">
           {targetPose ? (
@@ -235,15 +244,12 @@ export default function PoseMatchView({
         </div>
       </div>
 
-      {/* Bottom bar */}
       <div className="absolute left-0 right-0 bottom-0 p-8">
         <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
           <div className="flex gap-8 items-end">
             <div className="shrink-0">
               <DefaultSpeakerSprite />
-              <div className="mt-3 text-sm text-white/70 text-center">
-                Pose Match
-              </div>
+              <div className="mt-3 text-sm text-white/70 text-center">Pose Match</div>
             </div>
 
             <div className="flex-1 min-w-0">
@@ -255,14 +261,12 @@ export default function PoseMatchView({
               </div>
 
               <div className="mt-3 text-sm text-white/50">
-                Target: {targetPoseId ?? "—"} | Step{" "}
-                {Math.min(stepIndex + 1, poseIds.length)} / {poseIds.length} |
-                Tolerance: {effectiveThreshold.toFixed(0)}%
+                Target: {targetPoseId ?? "—"} | Step {Math.min(stepIndex + 1, poseIds.length)} /{" "}
+                {poseIds.length} | Tolerance: {effectiveThreshold.toFixed(0)}%
               </div>
 
               <div className="mt-3 text-sm text-white/80">
-                Similarity:{" "}
-                <span className="font-mono">{overall.toFixed(1)}%</span>{" "}
+                Similarity: <span className="font-mono">{overall.toFixed(1)}%</span>{" "}
                 {matched ? (
                   <span className="text-green-300">(matched)</span>
                 ) : (

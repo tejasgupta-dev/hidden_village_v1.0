@@ -2,17 +2,28 @@
 
 import { STATE_TYPES } from "@/lib/gamePlayer/states/_shared/stateTypes";
 
-/**
- * Build stateNodes from:
- * - game.storyline[levelIndex] -> intro/outro dialogues (per level)
- * - level (game.levels[levelIndex]) -> poses map (object)
- *
- * We do NOT store stateNodes in Firebase.
- *
- * Behavior:
- * - ONE TWEEN node for all poses (poseIds[])
- * - ONE POSE_MATCH node for all poses (poseIds[])
- */
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function clamp(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+// Accept 0..1 or 0..100; output 0..100
+function toPct(value) {
+  const t = Number(value);
+  if (!Number.isFinite(t)) return null;
+  return t <= 1 ? t * 100 : t;
+}
+
+function clampPct(v, fallback = 60) {
+  const n = toPct(v);
+  if (!Number.isFinite(n)) return fallback;
+  return clamp(n, 0, 100);
+}
 
 function unwrapDoc(maybeDoc) {
   if (!maybeDoc) return { id: null, data: null };
@@ -21,11 +32,7 @@ function unwrapDoc(maybeDoc) {
     return { id: maybeDoc?.id ?? null, data: maybeDoc.data() ?? null };
   }
 
-  if (
-    maybeDoc?.data &&
-    typeof maybeDoc.data === "object" &&
-    !Array.isArray(maybeDoc.data)
-  ) {
+  if (maybeDoc?.data && isPlainObject(maybeDoc.data)) {
     return { id: maybeDoc?.id ?? null, data: maybeDoc.data };
   }
 
@@ -56,7 +63,6 @@ function getPoseIds(level) {
   const poses = level?.poses;
   if (!poses) return [];
 
-  // If it ever becomes an array later, support that too
   if (Array.isArray(poses)) {
     return poses
       .map((p) => p?.id ?? p?.poseId ?? p?.key ?? null)
@@ -64,7 +70,6 @@ function getPoseIds(level) {
   }
 
   if (typeof poses === "object") {
-    // stable ordering: sort by numeric suffix in "pose_<timestamp>"
     return Object.keys(poses)
       .filter(Boolean)
       .sort((a, b) => {
@@ -134,11 +139,30 @@ function resolveAutoAdvanceMS({ storyLevel, level }, nodeType) {
   return storyLevel?.autoAdvanceMS ?? level?.autoAdvanceMS ?? undefined;
 }
 
-export function buildStateNodesForLevel({
-  level: levelInput,
-  story: gameInput,
-  levelIndex = 0,
-}) {
+function resolveDefaultPoseTolerance({ storyLevel, level }) {
+  return clampPct(level?.poseThreshold ?? storyLevel?.poseThreshold ?? 60, 60);
+}
+
+function resolvePoseTolerances({ storyLevel, level }, poseIds) {
+  const defaultTol = resolveDefaultPoseTolerance({ storyLevel, level });
+
+  // ✅ canonical field
+  const mapA = isPlainObject(level?.poseTolerancePctById) ? level.poseTolerancePctById : null;
+
+  // ✅ legacy support (in case you used a different name earlier)
+  const mapB = isPlainObject(level?.poseTolerancesById) ? level.poseTolerancesById : null;
+
+  return poseIds.map((poseId) => {
+    const raw =
+      (mapA && Object.prototype.hasOwnProperty.call(mapA, poseId) ? mapA[poseId] : undefined) ??
+      (mapB && Object.prototype.hasOwnProperty.call(mapB, poseId) ? mapB[poseId] : undefined);
+
+    if (raw === undefined || raw === null || raw === "") return defaultTol;
+    return clampPct(raw, defaultTol);
+  });
+}
+
+export function buildStateNodesForLevel({ level: levelInput, story: gameInput, levelIndex = 0 }) {
   const { id: levelDocId, data: level } = unwrapDoc(levelInput);
   const { id: gameDocId, data: game } = unwrapDoc(gameInput);
 
@@ -164,7 +188,7 @@ export function buildStateNodesForLevel({
   const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
   const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  // ONE TWEEN node for all transitions (only if 2+ poses)
+  // TWEEN node
   if (poseIds.length >= 2 && STATE_TYPES.TWEEN) {
     nodes.push({
       type: STATE_TYPES.TWEEN,
@@ -176,12 +200,17 @@ export function buildStateNodesForLevel({
     });
   }
 
-  // ✅ ONE POSE_MATCH node for all targets (only if 1+ poses)
+  // POSE_MATCH node
   if (poseIds.length >= 1) {
+    const defaultTolerance = resolveDefaultPoseTolerance({ storyLevel, level });
+    const poseTolerances = resolvePoseTolerances({ storyLevel, level }, poseIds);
+
     nodes.push({
       type: STATE_TYPES.POSE_MATCH,
       poseIds,
-      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 60,
+      threshold: defaultTolerance,
+      defaultTolerance,
+      poseTolerances,
       cursorDelayMS,
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
       levelId: level?.id ?? levelDocId ?? null,
@@ -201,6 +230,6 @@ export function buildStateNodesForLevel({
     });
   }
 
-  console.log(nodes)
+  console.log("STATE_NODES", nodes);
   return nodes;
 }

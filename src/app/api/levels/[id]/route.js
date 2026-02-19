@@ -4,11 +4,81 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
+const isPlainObject = (v) =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+const clamp = (n, min, max) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+};
+
+function normalizeBool(v) {
+  return v === true || v === "true";
+}
+
+function normalizeTFAnswer(v) {
+  if (v === true || v === "true") return true;
+  if (v === false || v === "false") return false;
+  return null;
+}
+
+function normalizePoseToleranceMap(v) {
+  if (!isPlainObject(v)) return undefined; // undefined => don’t write
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    out[String(k)] = clamp(val, 0, 100);
+  }
+  return out;
+}
+
+// Whitelist + normalize fields you allow to be patched
+function sanitizePatch(body) {
+  const b = isPlainObject(body) ? body : {};
+
+  const out = {};
+
+  // common fields (keep what you already support)
+  if (b.name !== undefined) out.name = String(b.name);
+  if (b.keywords !== undefined) out.keywords = String(b.keywords);
+  if (b.description !== undefined) out.description = String(b.description);
+  if (b.question !== undefined) out.question = String(b.question);
+
+  if (b.options !== undefined) out.options = Array.isArray(b.options) ? b.options.map((x) => String(x ?? "")) : [];
+  if (b.answers !== undefined) out.answers = Array.isArray(b.answers) ? b.answers.map((x) => Number(x)).filter(Number.isFinite) : [];
+
+  if (b.poses !== undefined) out.poses = isPlainObject(b.poses) ? b.poses : {};
+
+  if (Object.prototype.hasOwnProperty.call(b, "isPublished")) {
+    out.isPublished = normalizeBool(b.isPublished);
+  }
+
+  // ✅ PIN allowed IF client sends it (your permission logic gates who can do it)
+  if (Object.prototype.hasOwnProperty.call(b, "pin")) {
+    out.pin = String(b.pin ?? "");
+  }
+
+  // ✅ NEW: True/False gate
+  if (Object.prototype.hasOwnProperty.call(b, "trueFalseEnabled")) {
+    out.trueFalseEnabled = normalizeBool(b.trueFalseEnabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(b, "trueFalseAnswer")) {
+    out.trueFalseAnswer = normalizeTFAnswer(b.trueFalseAnswer);
+  }
+
+  // ✅ NEW: per-pose tolerance
+  if (Object.prototype.hasOwnProperty.call(b, "poseTolerancePctById")) {
+    const norm = normalizePoseToleranceMap(b.poseTolerancePctById);
+    // if user sends garbage, store empty object (or skip). I prefer empty object.
+    out.poseTolerancePctById = norm ?? {};
+  }
+
+  return out;
+}
+
 /**
  * GET /levels/[id]
- * Modes:
- *  - mode=play: public access to published levels; PIN enforced if level has a pin
- *  - default (edit): requires session; owner/admin bypasses PIN; others use preview flow
+ * (unchanged)
  */
 export async function GET(req, context) {
   try {
@@ -152,12 +222,7 @@ export async function GET(req, context) {
 
 /**
  * PATCH /levels/[id]
- * Permissions:
- *  - owner/admin always allowed
- *  - if PIN exists -> must provide correct x-level-pin for non-owner/admin
- *  - if NO PIN exists -> allowed for any authenticated user
- *
- * Mirrors menu fields to LevelList/{id}
+ * (updated sanitizer)
  */
 export async function PATCH(req, context) {
   const { success, user, response } = await requireSession();
@@ -210,22 +275,14 @@ export async function PATCH(req, context) {
     }
 
     const body = await req.json();
+    const sanitized = sanitizePatch(body);
 
-    // normalize isPublished boolean if it might arrive as string
-    const normalizedBody = {
-      ...body,
-      ...(Object.prototype.hasOwnProperty.call(body, "isPublished") && {
-        isPublished: body.isPublished === true || body.isPublished === "true",
-      }),
-    };
-
-    // IMPORTANT: updates should be MERGED into existing node, not replace it.
     const updates = {
-      ...normalizedBody,
+      ...sanitized,
       updatedAt: Date.now(),
     };
 
-    // Build LevelList mirror patch
+    // Build LevelList mirror patch (menu)
     const levelListPatch = {};
     if (updates.name !== undefined) levelListPatch.name = updates.name;
     if (updates.author !== undefined) levelListPatch.author = updates.author;
@@ -233,19 +290,12 @@ export async function PATCH(req, context) {
     if (updates.keywords !== undefined) levelListPatch.keywords = updates.keywords;
     if (updates.isPublished !== undefined) levelListPatch.isPublished = updates.isPublished;
 
-    // ✅ CRITICAL FIX:
-    // Multi-path update of `level/${id}` with an object REPLACES that node.
-    // Instead, update field-by-field so omitted fields (like pin) are preserved.
     const multipath = {};
-
     for (const [key, value] of Object.entries(updates)) {
       multipath[`level/${id}/${key}`] = value;
     }
-
-    if (Object.keys(levelListPatch).length > 0) {
-      for (const [key, value] of Object.entries(levelListPatch)) {
-        multipath[`LevelList/${id}/${key}`] = value;
-      }
+    for (const [key, value] of Object.entries(levelListPatch)) {
+      multipath[`LevelList/${id}/${key}`] = value;
     }
 
     await db.ref().update(multipath);
@@ -270,7 +320,7 @@ export async function PATCH(req, context) {
 
 /**
  * DELETE /levels/[id]
- * Same permission rules as PATCH.
+ * (unchanged)
  */
 export async function DELETE(req, context) {
   const { success, user, response } = await requireSession();

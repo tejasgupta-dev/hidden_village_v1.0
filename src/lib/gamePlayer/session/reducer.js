@@ -26,6 +26,39 @@ function isSteppedPoseType(t) {
   return t === STATE_TYPES.POSE_MATCH;
 }
 
+/* ----------------------------- pose threshold helpers ----------------------------- */
+
+// Accept 0..1 or 0..100; output 0..100
+function toPct(value) {
+  const t = Number(value);
+  if (!Number.isFinite(t)) return null;
+  return t <= 1 ? t * 100 : t;
+}
+
+function clampPct(v, fallback = 70) {
+  const n = toPct(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, n));
+}
+
+function getPoseThresholdPctForStep(node, stepIndex, fallback = 70) {
+  // 1) node.poseTolerances[stepIndex]
+  const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
+  const fromArray =
+    arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
+  if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
+    return clampPct(fromArray, fallback);
+  }
+
+  // 2) node.defaultTolerance / node.threshold
+  const nodeDefault = node?.defaultTolerance ?? node?.threshold;
+  if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") {
+    return clampPct(nodeDefault, fallback);
+  }
+
+  return fallback;
+}
+
 /* ----------------------------- eventId helpers ----------------------------- */
 
 function baseEventId(session) {
@@ -223,6 +256,8 @@ function cancelNodeTimers(session, nodeIndex) {
 
 function enterNode(session, nodeIndex, { reason } = {}) {
   const node = session.levelStateNodes?.[nodeIndex] ?? null;
+  console.log("POSE NODE", node?.type, node?.poseIds?.length, node?.poseTolerances);
+
   const t = nodeType(node);
 
   let next = {
@@ -237,16 +272,22 @@ function enterNode(session, nodeIndex, { reason } = {}) {
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
 
+  // ✅ IMPORTANT: initialize poseMatch using node poseIds + node.poseTolerances[0]
   if (t === STATE_TYPES.POSE_MATCH) {
+    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+    const initialStep = 0;
+    const initialTargetPoseId = poseIds[initialStep] ?? null;
+    const initialThresholdPct = getPoseThresholdPctForStep(node, initialStep, 70);
+
     next = {
       ...next,
       poseMatch: {
         overall: 0,
         perSegment: [],
-        thresholdPct: 70,
+        thresholdPct: initialThresholdPct,
         matched: false,
-        targetPoseId: null,
-        stepIndex: 0,
+        targetPoseId: initialTargetPoseId,
+        stepIndex: initialStep,
         updatedAt: next.time.now,
       },
     };
@@ -389,13 +430,15 @@ function handleNext(session, payload) {
     const matched = !!session.poseMatch?.matched;
 
     if (!isManualClick && !matched) {
-      // auto path blocked unless matched
       return session;
     }
 
     if (i + 1 < poseIds.length) {
       const nextStep = i + 1;
       const nextTargetPoseId = poseIds[nextStep] ?? null;
+
+      // ✅ IMPORTANT: update thresholdPct for the NEXT step from node.poseTolerances[nextStep]
+      const nextThresholdPct = getPoseThresholdPctForStep(node, nextStep, 70);
 
       let s = {
         ...session,
@@ -407,7 +450,7 @@ function handleNext(session, payload) {
           perSegment: [],
           matched: false,
           targetPoseId: nextTargetPoseId,
-          thresholdPct: session.poseMatch?.thresholdPct ?? 70,
+          thresholdPct: nextThresholdPct, // ✅ FIX
           stepIndex: nextStep,
           updatedAt: session.time.now,
         },
@@ -420,6 +463,7 @@ function handleNext(session, payload) {
         stateType: t,
         stepIndex: s.stepIndex,
         targetPoseId: nextTargetPoseId,
+        thresholdPct: nextThresholdPct,
       });
 
       s = scheduleCursor(s);
@@ -448,7 +492,6 @@ function applyTimer(session, timer) {
     }
 
     case "AUTO_NEXT":
-      // ✅ auto-advance should not bypass match rules
       return handleNext(session, { source: "auto" });
 
     case "AUTO_ADVANCE":
