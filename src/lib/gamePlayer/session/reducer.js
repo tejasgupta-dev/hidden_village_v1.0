@@ -140,7 +140,8 @@ export function applyCommand(session, name, payload) {
 
       next = emitTelemetry(next, { type: "RESUME", at: session.time.now });
 
-      next = scheduleCursorIfDialogueLike(next);
+      // ✅ cursor applies to ALL states
+      next = scheduleCursor(next);
       return next;
     }
 
@@ -225,7 +226,8 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     nodeIndex,
   });
 
-  next = scheduleCursorIfDialogueLike(next);
+  // ✅ cursor applies to ALL states
+  next = scheduleCursor(next);
   next = maybeScheduleAutoAdvance(next);
 
   return next;
@@ -295,7 +297,8 @@ function handleNext(session) {
           dialogueIndex: nextDialogueIndex,
         });
 
-        s = scheduleCursorIfDialogueLike(s);
+        // ✅ cursor applies to ALL states (including dialogue)
+        s = scheduleCursor(s);
         s = maybeScheduleAutoAdvance(s);
         return s;
       }
@@ -389,10 +392,15 @@ function applyTimer(session, timer) {
   }
 }
 
-function scheduleCursorIfDialogueLike(session) {
+/**
+ * ✅ Cursor scheduling for ALL states.
+ * - uses node.cursorDelayMS if present
+ * - falls back to session.settings.cursor.delayMS
+ * - 0/undefined => show immediately
+ */
+function scheduleCursor(session) {
   const node = currentNode(session);
-  const t = nodeType(node);
-  if (!isDialogueLikeType(t)) return session;
+  if (!node) return session;
 
   const delayMS = node?.cursorDelayMS ?? session.settings?.cursor?.delayMS ?? 0;
 
