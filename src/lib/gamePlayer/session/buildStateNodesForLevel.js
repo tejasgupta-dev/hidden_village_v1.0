@@ -215,6 +215,7 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
       levelId: level?.id ?? levelDocId ?? null,
     });
+    console.log("This is builder" ,nodes);
   }
 
   // 3) OUTRO

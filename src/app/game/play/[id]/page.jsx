@@ -3,10 +3,30 @@ import GamePlayerClient from "./playerClient";
 
 export const dynamic = "force-dynamic";
 
-async function fetchGameAndLevels(gameId) {
-  // Fetch game first to validate it's published and get levelIds
-  const gameSnapshot = await db.ref(`Games/${gameId}`).get();
+function toPlayableLevel(levelId, level) {
+  return {
+    id: levelId,
+    name: level?.name ?? "",
+    description: level?.description ?? "",
+    options: level?.options ?? [],
+    answers: level?.answers ?? [],
+    keywords: level?.keywords ?? "",
+    poses: level?.poses ?? {},
 
+    // ✅ FIX: include tolerance + timing settings so buildStateNodesForLevel can see them
+    poseTolerancePctById:
+      level?.poseTolerancePctById && typeof level.poseTolerancePctById === "object"
+        ? level.poseTolerancePctById
+        : {},
+    poseThreshold: level?.poseThreshold ?? 60,
+    poseDurationMS: level?.poseDurationMS ?? null,
+    tweenDurationMS: level?.tweenDurationMS ?? null,
+    tweenEasing: level?.tweenEasing ?? null,
+  };
+}
+
+async function fetchGameAndLevels(gameId) {
+  const gameSnapshot = await db.ref(`Games/${gameId}`).get();
   if (!gameSnapshot.exists()) throw new Error("Game not found.");
 
   const game = gameSnapshot.val();
@@ -14,7 +34,6 @@ async function fetchGameAndLevels(gameId) {
 
   const levelIds = game.levelIds ?? [];
 
-  // Fetch all levels in parallel
   const levelSnapshots = await Promise.all(
     levelIds.map((levelId) => db.ref(`level/${levelId}`).get())
   );
@@ -26,19 +45,14 @@ async function fetchGameAndLevels(gameId) {
         return null;
       }
       const level = snapshot.val();
-      return {
-        id: levelIds[i],
-        name: level.name ?? "",
-        description: level.description ?? "",
-        options: level.options ?? [],
-        answers: level.answers ?? [],
-        keywords: level.keywords ?? "",
-        poses: level.poses ?? {},
-      };
+      return toPlayableLevel(levelIds[i], level);
     })
     .filter(Boolean);
 
   const { pin, ...safeGame } = game;
+
+  // ✅ optional debug: confirm tolerance arrived from DB
+  // console.log("[page] first level tolerance map:", levels?.[0]?.poseTolerancePctById);
 
   return {
     game: {
@@ -55,6 +69,7 @@ async function fetchGameAndLevels(gameId) {
 }
 
 export default async function Page({ params, searchParams }) {
+  // ✅ keep exactly how you had it
   const { id: gameId } = await params;
   const { level } = await searchParams;
 

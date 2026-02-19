@@ -89,8 +89,6 @@ export async function GET(req, context) {
       })
       .filter((level) => level !== null); // Remove null entries for missing levels
 
-    console.log(`Returned ${levels.length} levels for game ${id}`);
-
     return NextResponse.json({
       success: true,
       levels,
