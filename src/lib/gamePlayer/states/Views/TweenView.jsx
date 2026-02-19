@@ -41,7 +41,7 @@ export default function TweenView({ session, node, dispatch, width = 800, height
     return ids.map((id) => safeParsePose(poseMap[id])).filter(Boolean);
   }, [node?.poseIds, poseMap]);
 
-  const stepDurationMS = node?.stepDurationMS ?? 600;
+  const stepDurationMS = node?.stepDurationMS ?? 1000;
   const totalDuration = Math.max(1, poses.length - 1) * stepDurationMS;
 
   const onNext = () => dispatch(commands.next());
@@ -60,7 +60,7 @@ export default function TweenView({ session, node, dispatch, width = 800, height
             duration={stepDurationMS}
             width={width}
             height={height}
-            loop={false}
+            loop={true}
             isPlaying={true}
           />
         ) : (
