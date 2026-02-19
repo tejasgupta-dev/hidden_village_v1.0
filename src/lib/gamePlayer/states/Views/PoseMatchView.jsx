@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import PoseDrawer from "@/lib/pose/poseDrawer";
-import { matchSegmentToLandmarks, segmentSimilarity } from "@/lib/pose/poseDrawerHelper";
+import {
+  matchSegmentToLandmarks,
+  segmentSimilarity,
+} from "@/lib/pose/poseDrawerHelper";
 import { enrichLandmarks } from "@/lib/pose/landmark";
 
 function DefaultSpeakerSprite() {
@@ -84,9 +87,7 @@ export default function PoseMatchView({
    */
   const thresholdPct = useMemo(() => {
     const poseSpecific =
-      targetPose?.tolerancePct ??
-      targetPose?.tolerance ??
-      targetPose?.threshold;
+      targetPose?.tolerancePct ?? targetPose?.tolerance ?? targetPose?.threshold;
 
     const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
     const fromArray = arr ? arr[stepIndex] : undefined;
@@ -119,9 +120,6 @@ export default function PoseMatchView({
 
   /* ----------------------------- similarity compute ----------------------------- */
 
-  // Similarity ref (avoid 60fps rerenders)
-  const simRef = useRef({ overall: 0, perSegment: [] });
-
   useEffect(() => {
     let cancelled = false;
 
@@ -130,12 +128,18 @@ export default function PoseMatchView({
 
       const live = poseDataRef?.current ?? null;
 
+      // If either side missing, publish zeros
       if (!live?.poseLandmarks || !targetPose?.poseLandmarks) {
-        simRef.current = { overall: 0, perSegment: [] };
         dispatch({
           type: "COMMAND",
           name: "POSE_MATCH_SCORES",
-          payload: { overall: 0, perSegment: [], thresholdPct, targetPoseId, stepIndex },
+          payload: {
+            overall: 0,
+            perSegment: [],
+            thresholdPct,
+            targetPoseId,
+            stepIndex,
+          },
         });
         return;
       }
@@ -144,16 +148,26 @@ export default function PoseMatchView({
       const enrichedTarget = enrichLandmarks(targetPose);
 
       const perSegment = MATCH_CONFIG.map((cfg) => {
-        const playerSeg = matchSegmentToLandmarks(cfg, enrichedLive, { width: 400, height: 600 });
-        const modelSeg = matchSegmentToLandmarks(cfg, enrichedTarget, { width: 400, height: 600 });
-        const score = playerSeg && modelSeg ? segmentSimilarity(playerSeg, modelSeg) : 0;
+        const playerSeg = matchSegmentToLandmarks(cfg, enrichedLive, {
+          width: 400,
+          height: 600,
+        });
+        const modelSeg = matchSegmentToLandmarks(cfg, enrichedTarget, {
+          width: 400,
+          height: 600,
+        });
+        const score =
+          playerSeg && modelSeg ? segmentSimilarity(playerSeg, modelSeg) : 0;
         return { segment: cfg.segment, similarityScore: score };
       });
 
-      const valid = perSegment.map((s) => s.similarityScore).filter((v) => Number.isFinite(v));
-      const overall = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
+      const valid = perSegment
+        .map((s) => s.similarityScore)
+        .filter((v) => Number.isFinite(v));
 
-      simRef.current = { overall, perSegment };
+      const overall = valid.length
+        ? valid.reduce((a, b) => a + b, 0) / valid.length
+        : 0;
 
       dispatch({
         type: "COMMAND",
@@ -168,8 +182,11 @@ export default function PoseMatchView({
     };
   }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex]);
 
-  const overall = simRef.current.overall ?? 0;
-  const matched = overall >= thresholdPct;
+  /* ----------------------------- reducer truth ----------------------------- */
+  // ✅ Core fix: always use reducer state for matched/overall (no simRef race)
+  const overall = Number(session.poseMatch?.overall ?? 0);
+  const matched = !!session.poseMatch?.matched;
+  const effectiveThreshold = Number(session.poseMatch?.thresholdPct ?? thresholdPct);
 
   /* ----------------------------- advancing ----------------------------- */
 
@@ -182,17 +199,20 @@ export default function PoseMatchView({
   useEffect(() => {
     if (!targetPoseId) return;
     if (!holdDone) return;
-    if (!matched) return;
-    if (didAutoAdvanceRef.current) return;
 
+    // ✅ use reducer truth to match reducer gating
+    if (!matched) return;
+
+    if (didAutoAdvanceRef.current) return;
     didAutoAdvanceRef.current = true;
-    dispatch(commands.next({ source: "auto" })); // ✅ IMPORTANT
+
+    dispatch(commands.next({ source: "auto" }));
   }, [targetPoseId, holdDone, matched, dispatch]);
 
   // Manual Next: after holdDone, always advance (override)
   const onNext = () => {
     if (!holdDone) return;
-    dispatch(commands.next({ source: "click" })); // ✅ IMPORTANT
+    dispatch(commands.next({ source: "click" }));
   };
 
   return (
@@ -221,7 +241,9 @@ export default function PoseMatchView({
           <div className="flex gap-8 items-end">
             <div className="shrink-0">
               <DefaultSpeakerSprite />
-              <div className="mt-3 text-sm text-white/70 text-center">Pose Match</div>
+              <div className="mt-3 text-sm text-white/70 text-center">
+                Pose Match
+              </div>
             </div>
 
             <div className="flex-1 min-w-0">
@@ -233,12 +255,14 @@ export default function PoseMatchView({
               </div>
 
               <div className="mt-3 text-sm text-white/50">
-                Target: {targetPoseId ?? "—"} | Step {Math.min(stepIndex + 1, poseIds.length)} /{" "}
-                {poseIds.length} | Tolerance: {thresholdPct.toFixed(0)}%
+                Target: {targetPoseId ?? "—"} | Step{" "}
+                {Math.min(stepIndex + 1, poseIds.length)} / {poseIds.length} |
+                Tolerance: {effectiveThreshold.toFixed(0)}%
               </div>
 
               <div className="mt-3 text-sm text-white/80">
-                Similarity: <span className="font-mono">{overall.toFixed(1)}%</span>{" "}
+                Similarity:{" "}
+                <span className="font-mono">{overall.toFixed(1)}%</span>{" "}
                 {matched ? (
                   <span className="text-green-300">(matched)</span>
                 ) : (

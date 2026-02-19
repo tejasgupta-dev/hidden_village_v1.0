@@ -9,7 +9,7 @@ import { STATE_TYPES } from "@/lib/gamePlayer/states/_shared/stateTypes";
  *
  * We do NOT store stateNodes in Firebase.
  *
- * ✅ Behavior:
+ * Behavior:
  * - ONE TWEEN node for all poses (poseIds[])
  * - ONE POSE_MATCH node for all poses (poseIds[])
  */
@@ -166,7 +166,6 @@ export function buildStateNodesForLevel({
 
   // ONE TWEEN node for all transitions (only if 2+ poses)
   if (poseIds.length >= 2 && STATE_TYPES.TWEEN) {
-    console.log(a)
     nodes.push({
       type: STATE_TYPES.TWEEN,
       poseIds,
