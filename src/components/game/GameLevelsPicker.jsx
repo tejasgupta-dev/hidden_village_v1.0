@@ -64,7 +64,7 @@ export default function GameLevelsPicker({
           </label>
           <div className="flex gap-2">
             <select
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 !text-gray-900"
               value={selectedLevel}
               onChange={(e) => setSelectedLevel(e.target.value)}
               disabled={disabled}

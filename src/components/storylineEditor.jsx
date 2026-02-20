@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 
 const SECTIONS = ["intro", "outro"];
@@ -8,11 +8,23 @@ const SECTIONS = ["intro", "outro"];
 export default function StorylineEditor({ game, setGame, onClose }) {
   const [levelIndex, setLevelIndex] = useState(0);
 
-  const levelIds = game.levelIds ?? [];
-  const levelStory = (game.storyline ?? [])[levelIndex] ?? {
+  const levelIds = game?.levelIds ?? [];
+
+  // keep index in bounds if levels change
+  const safeLevelIndex = useMemo(() => {
+    if (!levelIds.length) return 0;
+    return Math.max(0, Math.min(levelIndex, levelIds.length - 1));
+  }, [levelIds.length, levelIndex]);
+
+  const levelStory = (game?.storyline ?? [])[safeLevelIndex] ?? {
     intro: [],
     outro: [],
   };
+
+  const inputClass =
+    "border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900 " +
+    "placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 " +
+    "!text-gray-900";
 
   /* -------------------------------------------------------
      HELPERS
@@ -21,13 +33,13 @@ export default function StorylineEditor({ game, setGame, onClose }) {
   function ensureLevel(index) {
     const newGame = {
       ...game,
-      storyline: (game.storyline ?? []).map((l) =>
+      storyline: (game?.storyline ?? []).map((l) =>
         l
           ? {
               intro: [...(l.intro ?? [])],
               outro: [...(l.outro ?? [])],
             }
-          : { intro: [], intuition: [], outro: [] }
+          : { intro: [], outro: [] }
       ),
     };
 
@@ -43,27 +55,27 @@ export default function StorylineEditor({ game, setGame, onClose }) {
   ------------------------------------------------------- */
 
   function addDialogue(section) {
-    const newGame = ensureLevel(levelIndex);
-    newGame.storyline[levelIndex][section] = [
-      ...(newGame.storyline[levelIndex][section] ?? []),
+    const newGame = ensureLevel(safeLevelIndex);
+    newGame.storyline[safeLevelIndex][section] = [
+      ...(newGame.storyline[safeLevelIndex][section] ?? []),
       { speaker: "", text: "" },
     ];
     setGame(newGame);
   }
 
   function updateDialogue(section, i, field, value) {
-    const newGame = ensureLevel(levelIndex);
-    const entries = [...(newGame.storyline[levelIndex][section] ?? [])];
+    const newGame = ensureLevel(safeLevelIndex);
+    const entries = [...(newGame.storyline[safeLevelIndex][section] ?? [])];
     entries[i] = { ...entries[i], [field]: value };
-    newGame.storyline[levelIndex][section] = entries;
+    newGame.storyline[safeLevelIndex][section] = entries;
     setGame(newGame);
   }
 
   function removeDialogue(section, i) {
-    const newGame = ensureLevel(levelIndex);
-    const entries = [...(newGame.storyline[levelIndex][section] ?? [])];
+    const newGame = ensureLevel(safeLevelIndex);
+    const entries = [...(newGame.storyline[safeLevelIndex][section] ?? [])];
     entries.splice(i, 1);
-    newGame.storyline[levelIndex][section] = entries;
+    newGame.storyline[safeLevelIndex][section] = entries;
     setGame(newGame);
   }
 
@@ -73,94 +85,146 @@ export default function StorylineEditor({ game, setGame, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex justify-center items-center p-4">
-      <div className="bg-white w-full max-w-4xl max-h-[90vh] overflow-auto rounded-lg p-6">
+      <div className="bg-white w-full max-w-4xl rounded-2xl shadow-xl overflow-hidden">
+        {/* Sticky header */}
+        <div className="sticky top-0 z-10 bg-white border-b px-6 py-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Storyline Editor</h2>
+            {levelIds.length > 0 ? (
+              <p className="text-xs text-gray-600 mt-0.5">
+                Editing level {safeLevelIndex + 1} of {levelIds.length}
+              </p>
+            ) : null}
+          </div>
 
-        {/* HEADER */}
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold">Storyline Editor</h2>
-          <X className="cursor-pointer" onClick={onClose} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-gray-100 text-gray-700"
+            aria-label="Close"
+            title="Close"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        {/* NO LEVELS */}
-        {levelIds.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-8">
-            No levels added yet. Add levels from the game editor first.
-          </p>
-        ) : (
-          <>
-            {/* LEVEL TABS */}
-            <div className="flex flex-wrap gap-2 mb-6">
-              {levelIds.map((id, i) => (
-                <button
-                  key={id}
-                  onClick={() => setLevelIndex(i)}
-                  className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                    i === levelIndex
-                      ? "bg-blue-600 text-white"
-                      : "bg-gray-200 hover:bg-gray-300"
-                  }`}
-                >
-                  Level {i + 1}
-                  <span className="ml-1 text-xs opacity-70">({id})</span>
-                </button>
-              ))}
+        {/* Scroll area */}
+        <div className="max-h-[80vh] overflow-auto px-6 py-5">
+          {/* NO LEVELS */}
+          {levelIds.length === 0 ? (
+            <div className="text-center py-14">
+              <div className="text-gray-900 font-semibold mb-2">No levels yet</div>
+              <p className="text-sm text-gray-600">
+                Add levels from the game editor first, then come back here to edit dialogue.
+              </p>
             </div>
-
-            {/* SECTIONS */}
-            {SECTIONS.map((section) => (
-              <div key={section} className="mb-8">
-                <h3 className="font-semibold capitalize text-gray-700 border-b pb-1 mb-3">
-                  {section}
-                </h3>
-
-                {(levelStory[section] ?? []).map((dialogue, i) => (
-                  <div key={i} className="flex gap-2 mb-2 items-center">
-                    <input
-                      placeholder="Speaker"
-                      value={dialogue.speaker}
-                      onChange={(e) =>
-                        updateDialogue(section, i, "speaker", e.target.value)
-                      }
-                      className="border p-2 rounded w-32 text-sm"
-                    />
-                    <input
-                      placeholder="Dialogue"
-                      value={dialogue.text}
-                      onChange={(e) =>
-                        updateDialogue(section, i, "text", e.target.value)
-                      }
-                      className="border p-2 rounded flex-1 text-sm"
-                    />
-                    <Trash2
-                      size={16}
-                      className="cursor-pointer text-red-500 hover:text-red-700 shrink-0"
-                      onClick={() => removeDialogue(section, i)}
-                    />
-                  </div>
-                ))}
-
-                <button
-                  onClick={() => addDialogue(section)}
-                  className="flex items-center gap-1 mt-1 text-sm text-blue-600 hover:text-blue-800"
-                >
-                  <Plus size={14} />
-                  Add line
-                </button>
+          ) : (
+            <>
+              {/* LEVEL TABS */}
+              <div className="flex flex-wrap gap-2 mb-6">
+                {levelIds.map((id, i) => {
+                  const active = i === safeLevelIndex;
+                  return (
+                    <button
+                      key={`${id}-${i}`}
+                      type="button"
+                      onClick={() => setLevelIndex(i)}
+                      className={[
+                        "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
+                        active
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-gray-900 border-gray-200 hover:bg-gray-50",
+                      ].join(" ")}
+                      title={id}
+                    >
+                      <span>Level {i + 1}</span>
+                      <span className={["ml-2 text-xs", active ? "opacity-80" : "text-gray-500"].join(" ")}>
+                        {String(id).length > 14 ? `${String(id).slice(0, 6)}…${String(id).slice(-6)}` : `(${id})`}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-          </>
-        )}
 
-        {/* FOOTER */}
-        <div className="flex justify-end pt-4 border-t mt-2">
+              {/* SECTIONS */}
+              <div className="grid grid-cols-1 gap-6">
+                {SECTIONS.map((section) => {
+                  const entries = levelStory?.[section] ?? [];
+                  return (
+                    <div key={section} className="border rounded-2xl p-4 bg-white">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold capitalize text-gray-900">{section}</h3>
+
+                        <button
+                          type="button"
+                          onClick={() => addDialogue(section)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-900"
+                        >
+                          <Plus size={14} />
+                          Add line
+                        </button>
+                      </div>
+
+                      {entries.length === 0 ? (
+                        <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-4">
+                          No lines yet. Click <span className="font-medium">Add line</span> to start.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {entries.map((dialogue, i) => (
+                            <div
+                              key={`${section}-${i}`}
+                              className="flex flex-col md:flex-row gap-2 md:items-center"
+                            >
+                              <input
+                                placeholder="Speaker"
+                                value={dialogue?.speaker ?? ""}
+                                onChange={(e) =>
+                                  updateDialogue(section, i, "speaker", e.target.value)
+                                }
+                                className={`${inputClass} md:w-44`}
+                              />
+
+                              <input
+                                placeholder="Dialogue"
+                                value={dialogue?.text ?? ""}
+                                onChange={(e) =>
+                                  updateDialogue(section, i, "text", e.target.value)
+                                }
+                                className={`${inputClass} flex-1`}
+                              />
+
+                              <button
+                                type="button"
+                                onClick={() => removeDialogue(section, i)}
+                                className="p-2 rounded-lg hover:bg-red-50 text-red-600 self-start md:self-auto"
+                                title="Remove line"
+                                aria-label="Remove line"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Sticky footer */}
+        <div className="sticky bottom-0 bg-white border-t px-6 py-4 flex justify-end">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-900 text-sm"
+            className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-black text-sm"
           >
             Done
           </button>
         </div>
-
       </div>
     </div>
   );

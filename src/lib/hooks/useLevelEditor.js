@@ -267,7 +267,7 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
             if (desiredPin) setStoredPin(newId, desiredPin);
             else clearStoredPin(newId);
 
-            router.replace(`/level/edit/${newId}`);
+            router.replace(`/level/${newId}`);
             return;
           }
 
