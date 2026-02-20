@@ -362,7 +362,11 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
     setLevel((prev) => {
       const newPoses = { ...(prev?.poses || {}) };
       delete newPoses[key];
-      return { ...prev, poses: newPoses };
+
+      const newTol = { ...(prev?.poseTolerancePctById || {}) };
+      delete newTol[key];
+
+      return { ...prev, poses: newPoses, poseTolerancePctById: newTol };
     });
   };
 

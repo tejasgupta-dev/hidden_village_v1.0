@@ -1,17 +1,112 @@
+// app/game/play/[id]/page.jsx
 import { db } from "@/lib/firebase/firebaseAdmin";
 import GamePlayerClient from "./playerClient";
 
 export const dynamic = "force-dynamic";
 
+/* ----------------------------- helpers ----------------------------- */
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function clamp(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function normalizeBool(v) {
+  return v === true || v === "true";
+}
+
+/**
+ * RTDB poses may come back as:
+ *  - object: { pose_123: "{\"pose\":{...},\"tolerancePct\":69}", ... }
+ *  - or already-parsed object in some cases
+ *
+ * We normalize to:
+ *  - poses: { pose_123: <poseObject>, ... }  // what PoseDrawer + matcher expects
+ *  - poseTolerancePctById: { pose_123: 69, ... } // optional per-pose tolerance map
+ */
+function normalizePoses(rawPoses) {
+  const poses = {};
+  const poseTolerancePctById = {};
+
+  if (!rawPoses) return { poses, poseTolerancePctById };
+
+  // RTDB can return array-ish or object; treat both
+  const entries = Array.isArray(rawPoses)
+    ? rawPoses.map((v, i) => [`pose_${i}`, v])
+    : Object.entries(rawPoses);
+
+  for (const [poseIdRaw, raw] of entries) {
+    const poseId = String(poseIdRaw || "").trim();
+    if (!poseId) continue;
+
+    let parsed = raw;
+
+    // 1) If it's a JSON string, parse it
+    if (typeof raw === "string") {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // skip invalid JSON
+        continue;
+      }
+    }
+
+    // 2) If it's { pose: {...}, tolerancePct }, extract pose + map tolerance
+    if (isPlainObject(parsed) && isPlainObject(parsed.pose)) {
+      poses[poseId] = parsed.pose;
+
+      if (parsed.tolerancePct != null && parsed.tolerancePct !== "") {
+        poseTolerancePctById[poseId] = clamp(parsed.tolerancePct, 0, 100);
+      }
+      continue;
+    }
+
+    // 3) If it's already a pose-like object, store it directly
+    if (isPlainObject(parsed)) {
+      poses[poseId] = parsed;
+      continue;
+    }
+
+    // else: skip
+  }
+
+  return { poses, poseTolerancePctById };
+}
+
 function toPlayableLevel(levelId, level) {
   const question = typeof level?.question === "string" ? level.question : "";
-  const trueFalseEnabled =
-    level?.trueFalseEnabled === true || level?.trueFalseEnabled === "true";
+
+  const trueFalseEnabled = normalizeBool(level?.trueFalseEnabled);
   const trueFalseAnswer =
-    typeof level?.trueFalseAnswer === "boolean" ? level.trueFalseAnswer : null;
+    typeof level?.trueFalseAnswer === "boolean"
+      ? level.trueFalseAnswer
+      : level?.trueFalseAnswer === "true"
+      ? true
+      : level?.trueFalseAnswer === "false"
+      ? false
+      : null;
 
   // options can be array OR RTDB object {0:"...",1:"..."} — keep as-is, builder normalizes
   const options = level?.options ?? [];
+
+  // ✅ IMPORTANT: normalize RTDB pose JSON strings -> objects
+  const { poses, poseTolerancePctById: tolFromPoses } = normalizePoses(level?.poses ?? {});
+
+  // allow explicit map on level to override / extend parsed tolerances
+  const tolFromLevel =
+    level?.poseTolerancePctById && typeof level.poseTolerancePctById === "object"
+      ? level.poseTolerancePctById
+      : {};
+
+  const poseTolerancePctById = {
+    ...tolFromPoses,
+    ...tolFromLevel,
+  };
 
   return {
     // identity
@@ -20,8 +115,8 @@ function toPlayableLevel(levelId, level) {
     description: level?.description ?? "",
     keywords: level?.keywords ?? "",
 
-    // pose content
-    poses: level?.poses ?? {},
+    // ✅ pose content (NOW objects, not JSON strings)
+    poses,
 
     // ✅ INSIGHT inputs
     question,
@@ -35,10 +130,7 @@ function toPlayableLevel(levelId, level) {
     answers: level?.answers ?? [],
 
     // ✅ pose matching config
-    poseTolerancePctById:
-      level?.poseTolerancePctById && typeof level.poseTolerancePctById === "object"
-        ? level.poseTolerancePctById
-        : {},
+    poseTolerancePctById,
     poseThreshold: level?.poseThreshold ?? 60,
     poseDurationMS: level?.poseDurationMS ?? null,
 
@@ -102,7 +194,7 @@ export default async function Page({ params, searchParams }) {
 
   const { game, levels } = await fetchGameAndLevels(gameId);
   const levelIndex = level ? Number(level) : 0;
-
+  
   return (
     <GamePlayerClient
       game={game}

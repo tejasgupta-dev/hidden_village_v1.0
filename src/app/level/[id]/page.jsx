@@ -61,6 +61,10 @@ export default function LevelEditPage() {
   const poses = useMemo(() => asObject(safeLevel.poses), [safeLevel.poses]);
   const options = useMemo(() => asArray(safeLevel.options), [safeLevel.options]);
   const answers = useMemo(() => asArray(safeLevel.answers), [safeLevel.answers]);
+  const poseTolerancePctById = useMemo(
+    () => asObject(safeLevel.poseTolerancePctById),
+    [safeLevel.poseTolerancePctById]
+  );
 
   const patchLevel = (patch) => {
     setLevel((prev) => ({ ...(prev ?? {}), ...(patch ?? {}) }));
@@ -148,12 +152,14 @@ export default function LevelEditPage() {
 
       {/* POSES */}
       <div className="border rounded-xl p-4 bg-white">
-        <LevelPosesEditor
-          poses={poses}
-          disabled={savingLevel}
-          onPosesUpdate={(nextPoses) => patchLevel({ poses: nextPoses })}
-          onRemovePose={(poseId) => removePose?.(poseId)}
-        />
+       <LevelPosesEditor
+        poses={poses}
+        poseTolerancePctById={poseTolerancePctById}
+        disabled={savingLevel}
+        onPosesUpdate={(nextPoses) => patchLevel({ poses: nextPoses })}
+        onPoseToleranceUpdate={(nextMap) => patchLevel({ poseTolerancePctById: nextMap })}
+        onRemovePose={(poseId) => removePose?.(poseId)}
+      />
       </div>
 
       {/* OPTIONS & ANSWERS */}
