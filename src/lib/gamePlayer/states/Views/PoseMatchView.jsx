@@ -1,10 +1,12 @@
+// src/lib/gamePlayer/states/poseMatchView.jsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import PoseDrawer from "@/lib/pose/poseDrawer";
-import { matchSegmentToLandmarks, segmentSimilarity } from "@/lib/pose/poseDrawerHelper";
 import { enrichLandmarks } from "@/lib/pose/landmark";
+import { clampPct } from "@/lib/pose/poseMatching";
+import { computePoseMatch, perFeatureToPerSegment } from "@/lib/pose/poseMatching";
 
 function DefaultSpeakerSprite() {
   return (
@@ -27,28 +29,8 @@ function safeParsePose(maybeJson) {
   }
 }
 
-const MATCH_CONFIG = [
-  { segment: "RIGHT_BICEP", data: "poseLandmarks" },
-  { segment: "RIGHT_FOREARM", data: "poseLandmarks" },
-  { segment: "LEFT_BICEP", data: "poseLandmarks" },
-  { segment: "LEFT_FOREARM", data: "poseLandmarks" },
-];
-
 function nowMS() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
-}
-
-// Accept 0..1 or 0..100; output 0..100
-function toPct(value) {
-  const t = Number(value);
-  if (!Number.isFinite(t)) return null;
-  return t <= 1 ? t * 100 : t;
-}
-
-function clampPct(v, fallback = 70) {
-  const n = toPct(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(0, Math.min(100, n));
 }
 
 export default function PoseMatchView({
@@ -84,15 +66,14 @@ export default function PoseMatchView({
   }, [poseMap, targetPoseId]);
 
   /**
-   * ✅ FIXED tolerance priority (0..100):
-   * 1) node.poseTolerances[stepIndex]   (your editor mapping)
-   * 2) level.poseTolerancePctById[targetPoseId]  (extra safety if mapping missing)
+   * tolerance priority (0..100):
+   * 1) node.poseTolerances[stepIndex]
+   * 2) level.poseTolerancePctById[targetPoseId]
    * 3) node.defaultTolerance || node.threshold
-   * 4) pose json tolerance fields (LAST so they can't override editor)
+   * 4) pose json tolerance fields (LAST)
    * 5) fallback 70
    */
   const thresholdPct = useMemo(() => {
-    // 1) node.poseTolerances
     const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
     const fromArray =
       arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
@@ -100,7 +81,6 @@ export default function PoseMatchView({
       return clampPct(fromArray, 70);
     }
 
-    // 2) level.poseTolerancePctById
     const map = level?.poseTolerancePctById;
     if (map && typeof map === "object" && targetPoseId) {
       const fromMap = map[targetPoseId];
@@ -109,13 +89,11 @@ export default function PoseMatchView({
       }
     }
 
-    // 3) node default
     const nodeDefault = node?.defaultTolerance ?? node?.threshold;
     if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") {
       return clampPct(nodeDefault, 70);
     }
 
-    // 4) pose json (last)
     const poseSpecific =
       targetPose?.tolerancePct ?? targetPose?.tolerance ?? targetPose?.threshold;
     if (poseSpecific !== undefined && poseSpecific !== null && poseSpecific !== "") {
@@ -155,7 +133,7 @@ export default function PoseMatchView({
 
       const live = poseDataRef?.current ?? null;
 
-      if (!live?.poseLandmarks || !targetPose?.poseLandmarks) {
+      if (!live || !targetPose) {
         dispatch({
           type: "COMMAND",
           name: "POSE_MATCH_SCORES",
@@ -170,23 +148,33 @@ export default function PoseMatchView({
         return;
       }
 
+      // NOTE: keep enrich so your downstream coordinate assumptions remain stable
       const enrichedLive = enrichLandmarks(live);
       const enrichedTarget = enrichLandmarks(targetPose);
 
-      const perSegment = MATCH_CONFIG.map((cfg) => {
-        const playerSeg = matchSegmentToLandmarks(cfg, enrichedLive, { width: 400, height: 600 });
-        const modelSeg = matchSegmentToLandmarks(cfg, enrichedTarget, { width: 400, height: 600 });
-        const score = playerSeg && modelSeg ? segmentSimilarity(playerSeg, modelSeg) : 0;
-        return { segment: cfg.segment, similarityScore: score };
+      // ✅ new engine: uses all available features across pose + hands on BOTH live+target
+      const result = computePoseMatch({
+        livePose: enrichedLive,
+        targetPose: enrichedTarget,
+        thresholdPct,
+        featureIds: null, // use everything available (you'll add settings later)
       });
 
-      const valid = perSegment.map((s) => s.similarityScore).filter((v) => Number.isFinite(v));
-      const overall = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
+      // ✅ bridge: compute segment scores for PoseDrawer coloring
+      const perSegment = perFeatureToPerSegment(result.perFeature);
 
       dispatch({
         type: "COMMAND",
         name: "POSE_MATCH_SCORES",
-        payload: { overall, perSegment, thresholdPct, targetPoseId, stepIndex },
+        payload: {
+          overall: result.overall,
+          perSegment,
+          // keep optional debug for later settings UI
+          perFeature: result.perFeature,
+          thresholdPct: result.thresholdPct,
+          targetPoseId,
+          stepIndex,
+        },
       });
     }, 100);
 
@@ -201,6 +189,11 @@ export default function PoseMatchView({
   const overall = Number(session.poseMatch?.overall ?? 0);
   const matched = !!session.poseMatch?.matched;
   const effectiveThreshold = Number(session.poseMatch?.thresholdPct ?? thresholdPct);
+
+  // ✅ this is what drives the colors now
+  const drawerScores = Array.isArray(session.poseMatch?.perSegment)
+    ? session.poseMatch.perSegment
+    : [];
 
   /* ----------------------------- advancing ----------------------------- */
 
@@ -236,7 +229,8 @@ export default function PoseMatchView({
               poseData={targetPose}
               width={Math.min(520, Math.floor(width * 0.55))}
               height={Math.min(700, Math.floor(height * 0.85))}
-              similarityScores={[]}
+              // ✅ pass real scores so it can color segments
+              similarityScores={drawerScores}
             />
           ) : (
             <div className="text-white/80 text-sm">No target pose available.</div>
