@@ -1,3 +1,4 @@
+// src/lib/pose/poseDrawer.jsx
 "use client";
 
 import { useEffect, useRef, forwardRef, useImperativeHandle } from "react";
@@ -20,14 +21,25 @@ function clamp01to100(v) {
   return Math.max(0, Math.min(100, n));
 }
 
+/**
+ * Supports both:
+ * - legacy: [{ segment: "RIGHT_BICEP", similarityScore: 80 }, ...]
+ * - feature-style: [{ id: "LH_INDEX_PIP", score: 80 }, ...]
+ *
+ * We color by segmentName; if segmentName isn't found in .segment, we also try .id.
+ */
 function getSegmentColor(similarityScores, segmentName, fallbackHex) {
   if (!segmentName || !Array.isArray(similarityScores) || similarityScores.length === 0) {
     return fallbackHex;
   }
-  const entry = similarityScores.find((s) => s.segment === segmentName);
+
+  const entry =
+    similarityScores.find((s) => s.segment === segmentName) ||
+    similarityScores.find((s) => s.id === segmentName);
+
   if (!entry) return fallbackHex;
 
-  const score = clamp01to100(entry.similarityScore);
+  const score = clamp01to100(entry.similarityScore ?? entry.score ?? entry.value ?? 0);
   return COLOR_SCALE(score).hex();
 }
 
@@ -58,7 +70,7 @@ function calculateArmWidth(poseData, width, height) {
 function drawPath(ctx, points, segmentName, similarityScores, { closePath = true } = {}) {
   if (!points?.length) return;
 
-  const baseFill = "#60a5fa";   // fallback (blue-ish)
+  const baseFill = "#60a5fa"; // fallback (blue-ish)
   const baseStroke = "#1d4ed8"; // fallback (darker blue)
 
   const fill = getSegmentColor(similarityScores, segmentName, baseFill);
@@ -77,6 +89,64 @@ function drawPath(ctx, points, segmentName, similarityScores, { closePath = true
   ctx.strokeStyle = stroke;
   ctx.lineWidth = LINE_WIDTH;
   ctx.stroke();
+}
+
+/* ----------------------------- helpers for hands ----------------------------- */
+
+// order of landmarks for each finger polyline (MediaPipe Hands)
+const HAND_FINGER_INDEX_PATHS = {
+  THUMB: [0, 1, 2, 3, 4],
+  INDEX: [0, 5, 6, 7, 8],
+  MIDDLE: [0, 9, 10, 11, 12],
+  RING: [0, 13, 14, 15, 16],
+  PINKY: [0, 17, 18, 19, 20],
+};
+
+// segments between joints (for per-segment coloring if you want it)
+const HAND_FINGER_BONE_SEGMENTS = {
+  THUMB: [
+    ["CMC", [0, 1, 2]],
+    ["MCP", [1, 2, 3]],
+    ["IP", [2, 3, 4]],
+  ],
+  INDEX: [
+    ["MCP", [0, 5, 6]],
+    ["PIP", [5, 6, 7]],
+    ["DIP", [6, 7, 8]],
+  ],
+  MIDDLE: [
+    ["MCP", [0, 9, 10]],
+    ["PIP", [9, 10, 11]],
+    ["DIP", [10, 11, 12]],
+  ],
+  RING: [
+    ["MCP", [0, 13, 14]],
+    ["PIP", [13, 14, 15]],
+    ["DIP", [14, 15, 16]],
+  ],
+  PINKY: [
+    ["MCP", [0, 17, 18]],
+    ["PIP", [17, 18, 19]],
+    ["DIP", [18, 19, 20]],
+  ],
+};
+
+function toHandPoint(lm, width, height) {
+  if (!lm) return null;
+  const x = lm.x * width;
+  const y = lm.y * height;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function getHandPolylinePoints(hand, idxs, width, height) {
+  const pts = [];
+  for (const idx of idxs) {
+    const p = toHandPoint(hand[idx], width, height);
+    if (!p) return null;
+    pts.push(p);
+  }
+  return pts;
 }
 
 /* ----------------------------- part drawing ----------------------------- */
@@ -139,10 +209,8 @@ const draw = {
 
       const handData = poseData[`${side.toLowerCase()}HandLandmarks`];
       const wrist = handData
-        ? objMap(
-            LANDMARK_GROUPINGS.WRIST_LANDMARK,
-            landmarkToCoordinates(handData, width, height)
-          ).WRIST
+        ? objMap(LANDMARK_GROUPINGS.WRIST_LANDMARK, landmarkToCoordinates(handData, width, height))
+            .WRIST
         : coords[`${side}_WRIST`];
 
       if (!wrist) continue;
@@ -210,15 +278,14 @@ const draw = {
   face(poseData, ctx, { width, height }) {
     if (!poseData.faceLandmarks) return;
 
-    // Face oval (keep neutral)
     const oval = FACEMESH_FACE_OVAL.map(([idx]) => {
       const p = poseData.faceLandmarks[idx];
       return { x: p.x * width, y: p.y * height };
     });
 
+    // keep neutral for now (no segmentName)
     drawPath(ctx, oval, null, null);
 
-    // Dots
     ctx.fillStyle = "#93c5fd";
     ctx.strokeStyle = "#60a5fa";
     ctx.lineWidth = 1;
@@ -234,29 +301,41 @@ const draw = {
     }
   },
 
-  hands(poseData, ctx, { width, height }) {
+  hands(poseData, ctx, { width, height, similarityScores }) {
     for (const side of ["right", "left"]) {
       const hand = poseData[`${side}HandLandmarks`];
       if (!hand) continue;
 
+      const SIDE = side.toUpperCase(); // RIGHT / LEFT
+
+      // Palm polygon (from your landmark grouping)
       const palm = objMap(
         LANDMARK_GROUPINGS.PALM_LANDMARKS,
         landmarkToCoordinates(hand, width, height)
       );
 
-      drawPath(ctx, Object.values(palm), null, null);
+      // ✅ palm colored
+      drawPath(ctx, Object.values(palm), `${SIDE}_PALM`, similarityScores);
 
-      const fingerGroups = [
-        LANDMARK_GROUPINGS.THUMB_LANDMARKS,
-        LANDMARK_GROUPINGS.INDEX_FINGER_LANDMARKS,
-        LANDMARK_GROUPINGS.MIDDLE_FINGER_LANDMARKS,
-        LANDMARK_GROUPINGS.RING_FINGER_LANDMARKS,
-        LANDMARK_GROUPINGS.PINKY_LANDMARKS,
-      ];
+      // ✅ draw each finger polyline (whole finger color)
+      for (const fingerName of Object.keys(HAND_FINGER_INDEX_PATHS)) {
+        const idxs = HAND_FINGER_INDEX_PATHS[fingerName];
+        const pts = getHandPolylinePoints(hand, idxs, width, height);
+        if (!pts) continue;
 
-      for (const group of fingerGroups) {
-        const finger = objMap(group, landmarkToCoordinates(hand, width, height));
-        drawPath(ctx, Object.values(finger), null, null, { closePath: false });
+        drawPath(ctx, pts, `${SIDE}_${fingerName}`, similarityScores, { closePath: false });
+      }
+
+      // ✅ OPTIONAL: draw each finger joint-segment (more granular color)
+      // This overlays the polyline above with segment-level colors from poseMatching.
+      for (const fingerName of Object.keys(HAND_FINGER_BONE_SEGMENTS)) {
+        for (const [jointName, tri] of HAND_FINGER_BONE_SEGMENTS[fingerName]) {
+          const pts = getHandPolylinePoints(hand, tri, width, height);
+          if (!pts) continue;
+          drawPath(ctx, pts, `${SIDE}_${fingerName}_${jointName}`, similarityScores, {
+            closePath: false,
+          });
+        }
       }
     }
   },
