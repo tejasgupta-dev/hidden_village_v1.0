@@ -1,89 +1,46 @@
 "use client";
 
-import { useRef, useEffect, useMemo, useState, useCallback } from "react";
-import { Edit2, Plus, Check, X, ArrowLeft } from "lucide-react";
+import React, { useMemo } from "react";
+import { useRouter } from "next/navigation";
+
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useGameEditor } from "@/lib/hooks/useGameEditor";
 
-export default function NewGame() {
+import EditorHeader from "@/components/editor/EditorHeader";
+import SectionCard from "@/components/editor/SectionCard";
+import GameBasicsForm from "@/components/game/GameBasicsForm";
+import GameLevelsPicker from "@/components/game/GameLevelsPicker";
+
+export default function NewGamePage() {
+  const router = useRouter();
   const { user } = useAuth();
 
-  // Always creating new game
   const isNew = true;
   const id = null;
 
-  const { game, setGame, loadingGame, savingGame, allAvailableLevels, addLevel, handleSave, handleBack } =
-    useGameEditor(id, isNew, user?.email);
+  const {
+    game,
+    setGame,
+    loadingGame,
+    savingGame,
+    allAvailableLevels,
+    addLevel,
+    removeLevel,
+    handleSave,
+  } = useGameEditor(id, isNew, user?.email);
 
-  // Local UI state (because hook does not expose these)
-  const [showAddLevel, setShowAddLevel] = useState(false);
+  const safeGame = useMemo(() => game ?? {}, [game]);
 
-  // Inline edit state (local)
-  const [editingField, setEditingField] = useState(null);
-  const [editValue, setEditValue] = useState("");
-
-  const editRef = useRef(null);
-  const actionsRef = useRef(null);
-
-  const startEditing = useCallback(
-    (fieldKey, value) => {
-      setEditingField(fieldKey);
-      setEditValue(value ?? "");
-    },
-    [setEditingField, setEditValue]
-  );
-
-  const cancelEdit = useCallback(() => {
-    setEditingField(null);
-    setEditValue("");
-  }, []);
-
-  const saveEdit = useCallback(() => {
-    if (!editingField) return;
-
-    setGame((prev) => {
-      if (!prev) return prev;
-
-      // If user is editing PIN, we still store it in game draft (new game case)
-      return {
-        ...prev,
-        [editingField]: editValue,
-      };
-    });
-
-    setEditingField(null);
-    setEditValue("");
-  }, [editingField, editValue, setGame]);
-
-  // Commit edit before Save/Publish/Back
-  const commitInlineEditIfNeeded = useCallback(() => {
-    if (editingField) saveEdit();
-  }, [editingField, saveEdit]);
-
-  // Auto-save when clicking outside inline editor (ignore clicks on action buttons/header)
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (!editingField) return;
-      if (editRef.current && editRef.current.contains(event.target)) return;
-      if (actionsRef.current && actionsRef.current.contains(event.target)) return;
-      saveEdit();
-    };
-
-    if (editingField) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [editingField, saveEdit]);
-
-  const levelsList = useMemo(() => {
-    return Object.entries(allAvailableLevels || {});
-  }, [allAvailableLevels]);
+  const errors = useMemo(() => {
+    const e = {};
+    if (!safeGame?.name || !safeGame.name.trim()) e.name = "Name is required";
+    return e;
+  }, [safeGame]);
 
   if (loadingGame) {
     return (
-      <div className="min-h-screen bg-transparent flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3"></div>
-          <p className="text-gray-900 text-sm">Loading game...</p>
-        </div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-lg">Loading game...</div>
       </div>
     );
   }
@@ -97,271 +54,69 @@ export default function NewGame() {
   }
 
   return (
-    <div className="min-h-screen bg-transparent py-4 px-3">
-      <div className="max-w-5xl mx-auto space-y-4">
-        {/* HEADER */}
-        <div ref={actionsRef} className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="flex items-center justify-between">
-            <button
-              onClick={() => {
-                commitInlineEditIfNeeded();
-                handleBack();
-              }}
-              className="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium text-sm"
-            >
-              <ArrowLeft size={18} /> Back
-            </button>
+    <div className="max-w-6xl mx-auto p-4">
+      <EditorHeader
+        title="Create Game"
+        subtitle={user?.email ? `Author: ${user.email}` : undefined}
+        onBack={() => router.back()}
+      />
 
-            <h1 className="text-2xl font-bold text-gray-900 text-center flex-1">
-              Create Game
-            </h1>
-
-            <div className="w-20"></div>
-          </div>
-
-          <p className="text-sm text-gray-600 text-center mt-2">
-            {game.author || user?.email || ""}
-          </p>
-        </div>
-
-        {/* GAME INFO */}
-        <div className="bg-white rounded-lg border border-gray-300 p-4 space-y-3">
-          <h2 className="text-sm font-bold text-gray-900 mb-3">Game Info</h2>
-
-          <FieldEditor
-            label="Name"
-            value={game.name}
-            editingField={editingField}
-            fieldKey="name"
-            editValue={editValue}
-            setEditValue={setEditValue}
-            startEditing={startEditing}
-            saveEdit={saveEdit}
-            cancelEdit={cancelEdit}
-            editRef={editRef}
-          />
-
-          <FieldEditor
-            label="Description"
-            value={game.description}
-            editingField={editingField}
-            fieldKey="description"
-            editValue={editValue}
-            setEditValue={setEditValue}
-            startEditing={startEditing}
-            saveEdit={saveEdit}
-            cancelEdit={cancelEdit}
-            editRef={editRef}
-            isTextarea
-          />
-
-          <FieldEditor
-            label="Keywords"
-            value={game.keywords}
-            editingField={editingField}
-            fieldKey="keywords"
-            editValue={editValue}
-            setEditValue={setEditValue}
-            startEditing={startEditing}
-            saveEdit={saveEdit}
-            cancelEdit={cancelEdit}
-            editRef={editRef}
-          />
-
-          <FieldEditor
-            label="PIN"
-            value={game.pin}
-            editingField={editingField}
-            fieldKey="pin"
-            editValue={editValue}
-            setEditValue={setEditValue}
-            startEditing={startEditing}
-            saveEdit={saveEdit}
-            cancelEdit={cancelEdit}
-            editRef={editRef}
-          />
-        </div>
-
-        {/* LEVELS */}
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-sm font-bold text-gray-900">Levels</h2>
-
-            <button
-              onClick={() => setShowAddLevel(!showAddLevel)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-            >
-              <Plus size={16} /> Add Level
-            </button>
-          </div>
-
-          {showAddLevel && (
-            <div className="p-3 bg-gray-50 rounded border border-gray-300 mb-3">
-              <p className="font-semibold text-gray-900 text-sm mb-2">
-                Select a level to add:
-              </p>
-
-              <div className="flex flex-col gap-2 max-h-60 overflow-y-auto">
-                {levelsList.map(([levelId, levelData]) => (
-                  <div
-                    key={levelId}
-                    className={`flex justify-between p-2 rounded border text-sm ${
-                      game.levelIds?.includes(levelId)
-                        ? "bg-gray-200 border-gray-300 cursor-not-allowed opacity-50"
-                        : "bg-white border-gray-300 hover:border-blue-500 hover:bg-blue-50 cursor-pointer"
-                    }`}
-                    onClick={() => {
-                      if (game.levelIds?.includes(levelId)) return;
-                      commitInlineEditIfNeeded();
-                      addLevel(levelId);
-                    }}
-                  >
-                    <span className="text-gray-900">
-                      {levelData.name || "Untitled Level"}
-                    </span>
-
-                    {game.levelIds?.includes(levelId) && (
-                      <span className="text-green-600 font-semibold">✓ Added</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Level List */}
-          {game.levelIds && game.levelIds.length > 0 && (
-            <div className="space-y-2">
-              {game.levelIds.map((levelId) => {
-                const levelData = allAvailableLevels[levelId] || { name: "(loading…)" };
-                return (
-                  <div key={levelId} className="border border-gray-300 rounded bg-white p-3">
-                    <span className="text-gray-900 text-sm">
-                      {levelData.name || "Untitled Level"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ACTION BUTTONS */}
-        <div ref={actionsRef} className="bg-white rounded-lg border border-gray-300 p-3">
-          <div className="flex flex-wrap gap-2 justify-center">
-            <button
-              onClick={() => {
-                commitInlineEditIfNeeded();
-                handleSave(false);
-              }}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 space-y-4">
+          <SectionCard title="Basics">
+            <GameBasicsForm
+              game={safeGame}
               disabled={savingGame}
-              className="px-4 py-2 bg-gray-800 text-white text-sm font-semibold rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {savingGame ? "Saving..." : "Save Draft"}
-            </button>
-
-            <button
-              onClick={() => {
-                commitInlineEditIfNeeded();
-                handleSave(true);
-              }}
-              disabled={savingGame}
-              className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {savingGame ? "Publishing..." : "Publish"}
-            </button>
-
-            <button
-              className="px-4 py-2 bg-white border border-gray-400 text-gray-900 text-sm font-semibold rounded hover:bg-gray-50"
-              onClick={() => {
-                commitInlineEditIfNeeded();
-                handleBack();
-              }}
-            >
-              Back
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------
-   Reusable Inline Field Editor
---------------------------------------------------- */
-
-function FieldEditor({
-  label,
-  value,
-  editingField,
-  fieldKey,
-  editValue,
-  setEditValue,
-  startEditing,
-  saveEdit,
-  cancelEdit,
-  editRef,
-  isTextarea = false,
-}) {
-  const handleKeyDown = (e) => {
-    if (isTextarea) {
-      if (e.key === "Enter" && e.ctrlKey) saveEdit();
-      if (e.key === "Escape") cancelEdit();
-    } else {
-      if (e.key === "Enter") saveEdit();
-      if (e.key === "Escape") cancelEdit();
-    }
-  };
-
-  return (
-    <div className="flex gap-3 items-start">
-      <label className="w-28 text-xs font-semibold text-gray-900 pt-2">{label}</label>
-
-      <div className="flex-1 flex items-center gap-2 p-2 rounded border border-gray-300 bg-white hover:border-gray-400 min-h-[40px]">
-        {editingField === fieldKey ? (
-          <div ref={editRef} className="flex gap-2 flex-1">
-            {isTextarea ? (
-              <textarea
-                className="flex-1 p-2 border-2 border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-gray-900 bg-white"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                autoFocus
-                rows={3}
-              />
-            ) : (
-              <input
-                type="text"
-                className="flex-1 p-2 border-2 border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-gray-900 bg-white"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                autoFocus
-              />
-            )}
-
-            <Check className="text-green-600 cursor-pointer" size={20} onClick={saveEdit} />
-            <X className="text-red-600 cursor-pointer" size={20} onClick={cancelEdit} />
-          </div>
-        ) : (
-          <>
-            <span
-              onDoubleClick={() => startEditing(fieldKey, value)}
-              className={`flex-1 text-sm cursor-pointer ${
-                !value ? "text-gray-400 italic" : "text-gray-900"
-              }`}
-            >
-              {value || "Click to edit"}
-            </span>
-
-            <Edit2
-              className="text-blue-600 cursor-pointer"
-              size={18}
-              onClick={() => startEditing(fieldKey, value)}
+              errors={errors}
+              onChange={(patch) => setGame((prev) => ({ ...prev, ...patch }))}
             />
-          </>
-        )}
+          </SectionCard>
+
+          <SectionCard
+            title="Levels"
+            description="Add levels to include in this game. You can reorder in the editor after creating the game."
+          >
+            <GameLevelsPicker
+              levelIds={safeGame.levelIds || []}
+              availableLevels={allAvailableLevels || {}}
+              onAdd={(levelId) => addLevel(levelId)}
+              onRemove={(index) => removeLevel(index)}
+              disabled={savingGame}
+            />
+          </SectionCard>
+        </div>
+
+        <div className="space-y-4">
+          <SectionCard title="Actions">
+            <div className="space-y-3">
+              <button
+                type="button"
+                disabled={savingGame || Boolean(errors.name)}
+                onClick={() => handleSave(false)}
+                className="w-full bg-gray-900 text-white px-4 py-2 rounded hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingGame ? "Saving..." : "Save Draft"}
+              </button>
+
+              <button
+                type="button"
+                disabled={savingGame || Boolean(errors.name)}
+                onClick={() => handleSave(true)}
+                className="w-full bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingGame ? "Publishing..." : "Publish"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => router.back()}
+                className="w-full border px-4 py-2 rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </SectionCard>
+        </div>
       </div>
     </div>
   );
