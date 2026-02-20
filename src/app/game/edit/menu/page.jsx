@@ -3,11 +3,11 @@
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
-function GameMenu({ mode }) {
+function EditGameMenu({ mode }) {
   const router = useRouter();
 
   const playMode = mode === "play";
-  const editMode = mode === "edit";
+  const editMode = mode === "edit"; // (kept in case you use it later)
 
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -20,6 +20,10 @@ function GameMenu({ mode }) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
   const [pinLoading, setPinLoading] = useState(false);
+
+  const inputClass =
+    "w-full px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 " +
+    "placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 !text-gray-900";
 
   /* =========================================
      FETCH GAMES
@@ -38,10 +42,9 @@ function GameMenu({ mode }) {
         });
 
         const data = await res.json();
-
         if (!mounted) return;
 
-        if (!data.success || !Array.isArray(data.games)) {
+        if (!data?.success || !Array.isArray(data.games)) {
           setGames([]);
           return;
         }
@@ -60,7 +63,9 @@ function GameMenu({ mode }) {
     };
 
     fetchGames();
-    return () => (mounted = false);
+    return () => {
+      mounted = false;
+    };
   }, [playMode]);
 
   /* =========================================
@@ -69,16 +74,26 @@ function GameMenu({ mode }) {
   const filteredGames = useMemo(() => {
     if (!Array.isArray(games)) return [];
 
+    const q = (search || "").trim();
+    if (!q) return games;
+
     try {
-      const reg = new RegExp(search, "i");
+      const reg = new RegExp(q, "i");
       return games.filter(
         (g) =>
-          reg.test(g.name || "") ||
-          reg.test(g.author || "") ||
-          reg.test(g.keywords || "")
+          reg.test(g?.name || "") ||
+          reg.test(g?.author || "") ||
+          reg.test(g?.keywords || "")
       );
     } catch {
-      return games;
+      // invalid regex char like "[" -> fallback to substring matching
+      const lower = q.toLowerCase();
+      return games.filter((g) => {
+        const name = (g?.name || "").toLowerCase();
+        const author = (g?.author || "").toLowerCase();
+        const keywords = (g?.keywords || "").toLowerCase();
+        return name.includes(lower) || author.includes(lower) || keywords.includes(lower);
+      });
     }
   }, [games, search]);
 
@@ -114,6 +129,7 @@ function GameMenu({ mode }) {
     setSelectedGameId(null);
     setPin("");
     setPinError("");
+    setPinLoading(false);
   }, []);
 
   /* =========================================
@@ -132,20 +148,19 @@ function GameMenu({ mode }) {
 
       // ✅ PIN gating signals ONLY
       const pinGate =
-        data?.preview === true || (res.status === 403 && data?.code === "PIN_REQUIRED");
+        data?.preview === true ||
+        (res.status === 403 && data?.code === "PIN_REQUIRED");
 
       if (pinGate) {
         openPinModal(id);
         return;
       }
 
-      // Not a PIN gate -> show error if needed
       if (!res.ok || !data?.success) {
         alert(data?.message || "Failed to load game.");
         return;
       }
 
-      // ✅ Access granted (owner/admin/unlocked)
       navigateToGame(id);
     } catch (err) {
       console.error(err);
@@ -193,93 +208,144 @@ function GameMenu({ mode }) {
   /* =========================================
      RENDER
   ========================================= */
-  if (loading) return <p className="text-center text-gray-600">Loading games...</p>;
-  if (error) return <p className="text-center text-red-600">⚠️ {error}</p>;
+  if (loading) {
+    return <p className="text-center text-gray-600 py-10">Loading games...</p>;
+  }
+  if (error) {
+    return <p className="text-center text-red-600 py-10">⚠️ {error}</p>;
+  }
 
   return (
     <>
-      <div className="container mx-auto px-4 py-8">
-        <h2 className="text-3xl font-bold mb-6">
-          {playMode ? "Play Games" : "Edit Games"}
-        </h2>
-
-        <input
-          placeholder="Search by name, author, or keyword"
-          className="w-full px-4 py-2 mb-6 border rounded-lg"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-
-        {filteredGames.length === 0 ? (
-          <p className="text-center text-gray-600 py-8">
-            {playMode ? "No published games available" : "No games found"}
+      <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+        <div>
+          <h2 className="text-3xl font-bold text-gray-900">
+            {playMode ? "Play Games" : "Edit Games"}
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            {playMode
+              ? "Choose a published game to start playing."
+              : "Select a game to edit its details and levels."}
           </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white border rounded-lg">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="px-6 py-3 text-left text-sm font-semibold">Name</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold">Author</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold">Keywords</th>
-                  {!playMode && (
-                    <th className="px-6 py-3 text-left text-sm font-semibold">Status</th>
-                  )}
-                </tr>
-              </thead>
+        </div>
 
-              <tbody>
-                {filteredGames.map((game) => (
-                  <tr
-                    key={game.id}
-                    onClick={() => handleSelectGame(game.id)}
-                    className="border-t hover:bg-gray-50 cursor-pointer"
-                  >
-                    <td className="px-6 py-4">
-                      {game.name || "Untitled Game"}
-                      {game.hasPin && <span className="ml-2 text-yellow-600">🔒</span>}
-                    </td>
-                    <td className="px-6 py-4">{game.author || "Unknown"}</td>
-                    <td className="px-6 py-4">{game.keywords || "None"}</td>
+        <div className="bg-white border border-gray-200 rounded-2xl p-4">
+          <input
+            placeholder="Search by name, author, or keyword"
+            className={inputClass}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
 
+        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+          {filteredGames.length === 0 ? (
+            <div className="text-center text-gray-600 py-12">
+              {playMode ? "No published games available" : "No games found"}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                      Name
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                      Author
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                      Keywords
+                    </th>
                     {!playMode && (
-                      <td className="px-6 py-4">
-                        <span className={game.isPublished ? "text-green-600" : "text-orange-600"}>
-                          {game.isPublished ? "✅ Published" : "❌ Draft"}
-                        </span>
-                      </td>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                        Status
+                      </th>
                     )}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+
+                <tbody>
+                  {filteredGames.map((g) => (
+                    <tr
+                      key={g.id}
+                      onClick={() => handleSelectGame(g.id)}
+                      className="border-b last:border-b-0 hover:bg-gray-50 cursor-pointer transition-colors"
+                    >
+                      <td className="px-6 py-4 text-sm text-gray-900 max-w-[340px] truncate">
+                        {g.name || "Untitled Game"}
+                        {g.hasPin && (
+                          <span className="ml-2 text-yellow-600" title="PIN protected">
+                            🔒
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-6 py-4 text-sm text-gray-700 max-w-[220px] truncate">
+                        {g.author || "Unknown"}
+                      </td>
+
+                      <td className="px-6 py-4 text-sm text-gray-700 max-w-[340px] truncate">
+                        {g.keywords || "None"}
+                      </td>
+
+                      {!playMode && (
+                        <td className="px-6 py-4 text-sm">
+                          <span className={g.isPublished ? "text-green-600" : "text-orange-600"}>
+                            {g.isPublished ? "✅ Published" : "❌ Draft"}
+                          </span>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* PIN MODAL */}
       {showPinModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-xl font-bold mb-4">Protected Game</h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Protected Game</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Enter the PIN to access this game.
+                </p>
+              </div>
 
-            <form onSubmit={handlePinSubmit}>
+              <button
+                type="button"
+                onClick={closePinModal}
+                className="p-2 rounded-lg hover:bg-gray-100 text-gray-700"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handlePinSubmit} className="space-y-4">
               <input
                 type="password"
                 placeholder="Enter PIN"
-                className="w-full px-4 py-2 border rounded mb-4"
+                className={inputClass}
                 value={pin}
                 onChange={(e) => setPin(e.target.value)}
                 autoFocus
               />
 
-              {pinError && <p className="text-red-600 text-sm mb-4">{pinError}</p>}
+              {pinError ? (
+                <p className="text-red-600 text-sm">{pinError}</p>
+              ) : null}
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 pt-1">
                 <button
                   type="button"
                   onClick={closePinModal}
-                  className="flex-1 border rounded py-2"
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-gray-900"
                   disabled={pinLoading}
                 >
                   Cancel
@@ -287,7 +353,7 @@ function GameMenu({ mode }) {
 
                 <button
                   type="submit"
-                  className="flex-1 bg-blue-600 text-white rounded py-2"
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                   disabled={pinLoading}
                 >
                   {pinLoading ? "Verifying..." : "Submit"}
@@ -301,4 +367,4 @@ function GameMenu({ mode }) {
   );
 }
 
-export default GameMenu;
+export default EditGameMenu;
