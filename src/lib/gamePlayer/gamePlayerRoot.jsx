@@ -8,6 +8,8 @@ import { createInitialSession, sessionReducer } from "@/lib/gamePlayer/session/r
 import { createTelemetryBus } from "@/lib/gamePlayer/telemetry/telemetryBus";
 import { STATE_TYPES, normalizeStateType } from "@/lib/gamePlayer/states/_shared/stateTypes";
 
+import { createLocalCameraRecorder } from "./telemetry/localCameraRecorder";
+
 import PoseCursor from "@/lib/pose/poseCursor";
 import PoseDrawer from "@/lib/pose/poseDrawer";
 import getPoseData from "@/lib/mediapipe/getPoseData";
@@ -75,11 +77,7 @@ export default function GamePlayerRoot({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({
-            gameId,
-            levelId,
-            deviceId,
-          }),
+          body: JSON.stringify({ gameId, levelId, deviceId }),
         });
 
         if (res.ok) {
@@ -183,6 +181,11 @@ function GamePlayerInner({
   // Required hidden video element for getPoseData
   const videoRef = useRef(null);
 
+  // ✅ Local camera+mic recorder (hidden preview)
+  const cameraPreviewRef = useRef(null);
+  const cameraRecorderRef = useRef(null);
+  const startedCameraRef = useRef(false);
+
   // Telemetry bus — guaranteed to use the real playId
   useEffect(() => {
     const bus = createTelemetryBus({ playId });
@@ -193,6 +196,25 @@ function GamePlayerInner({
       bus.stopAutoFlush();
       void bus.flushAll();
       telemetryRef.current = null;
+    };
+  }, [playId]);
+
+  // ✅ Create camera recorder when playId exists
+  useEffect(() => {
+    if (!playId) return;
+
+    cameraRecorderRef.current = createLocalCameraRecorder({
+      playId,
+      previewVideoEl: cameraPreviewRef.current, // hidden <video>
+      videoConstraints: { width: 1280, height: 720, frameRate: 30, facingMode: "user" },
+      audioConstraints: true, // mic
+    });
+
+    return () => {
+      // best-effort stop+download if unmount happens mid-play
+      cameraRecorderRef.current?.stop?.({ download: true }).catch?.(() => {});
+      cameraRecorderRef.current = null;
+      startedCameraRef.current = false;
     };
   }, [playId]);
 
@@ -223,21 +245,12 @@ function GamePlayerInner({
 
       if (shouldRecordPoseRef.current && telemetryRef.current && poseDataRef.current) {
         const pose = poseDataRef.current;
-        /* telemetryRef.current.recordPoseFrame({
-          timestamp: Date.now(),
-          nodeIndex: session.nodeIndex,
-          stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
-          poseData: {
-            poseLandmarks: pose.poseLandmarks ?? null,
-            leftHandLandmarks: pose.leftHandLandmarks ?? null,
-            rightHandLandmarks: pose.rightHandLandmarks ?? null,
-          },
-        }); */
+
         telemetryRef.current.recordPoseFrame({
           timestamp: Date.now(),
           nodeIndex: session.nodeIndex,
           stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
-          poseData: pose ?? null,
+          poseData: pose ?? null, // ✅ full raw pose object
         });
       }
     },
@@ -253,21 +266,24 @@ function GamePlayerInner({
       return;
     }
 
-    // ✅ startup trio gating (only for those events)
     const startupAlreadySent = __startupTelemetrySentForPlay.has(playId);
-    if (!startupAlreadySent) {
-      __startupTelemetrySentForPlay.add(playId);
-    }
+    if (!startupAlreadySent) __startupTelemetrySentForPlay.add(playId);
 
     for (const eff of session.effects) {
       if (eff.type === "TELEMETRY_EVENT") {
         const evt = eff.event;
 
+        // ✅ Start camera recording once, at first real STATE_ENTER
+        if (!startedCameraRef.current && evt?.type === "STATE_ENTER") {
+          startedCameraRef.current = true;
+          cameraRecorderRef.current
+            ?.start?.()
+            .catch((e) => console.error("Camera recorder start failed:", e));
+        }
+
         // Only suppress the startup-ish ones after the first time
         if (startupAlreadySent) {
-          if (evt?.type === "SESSION_START" || evt?.type === "STATE_ENTER") {
-            continue;
-          }
+          if (evt?.type === "SESSION_START" || evt?.type === "STATE_ENTER") continue;
         }
 
         const { type, at, ...payload } = evt || {};
@@ -275,11 +291,9 @@ function GamePlayerInner({
       }
 
       if (eff.type === "POSE_RECORDING_HINT") {
-        // ✅ CRITICAL FIX:
         // Always toggle recording — do NOT skip this after startup.
         shouldRecordPoseRef.current = !!eff.enabled;
 
-        // Optional: emit only once to avoid noise
         if (!startupAlreadySent) {
           bus.emitEvent("POSE_RECORDING_HINT", {
             playId,
@@ -296,6 +310,10 @@ function GamePlayerInner({
           levelId: session.levelId,
           gameId: session.gameId,
         });
+
+        // ✅ Stop and download local camera recording
+        cameraRecorderRef.current?.stopAndDownload?.().catch(() => {});
+
         onComplete?.();
       }
     }
@@ -329,26 +347,20 @@ function GamePlayerInner({
 
   // Similarity overlays only during POSE_MATCH
   const rightSimilarityScores =
-    type === STATE_TYPES.POSE_MATCH ? (session.poseMatch?.perSegment ?? []) : [];
+    type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
 
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
-      <video
-        ref={videoRef}
-        className="input-video"
-        style={{ display: "none" }}
-        playsInline
-        muted
-      />
+      {/* Hidden video used for mediapipe pose detection */}
+      <video ref={videoRef} className="input-video" style={{ display: "none" }} playsInline muted />
+
+      {/* ✅ Hidden preview used for camera+mic recording */}
+      <video ref={cameraPreviewRef} style={{ display: "none" }} playsInline muted />
 
       {/* Background */}
       <div className="absolute inset-0">
         {level?.background ? (
-          <img
-            src={level.background}
-            alt=""
-            className="w-full h-full object-cover opacity-90"
-          />
+          <img src={level.background} alt="" className="w-full h-full object-cover opacity-90" />
         ) : (
           <div className="w-full h-full bg-gradient-to-b from-gray-900 to-black" />
         )}
