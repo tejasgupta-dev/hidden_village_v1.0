@@ -223,7 +223,7 @@ function GamePlayerInner({
 
       if (shouldRecordPoseRef.current && telemetryRef.current && poseDataRef.current) {
         const pose = poseDataRef.current;
-        telemetryRef.current.recordPoseFrame({
+        /* telemetryRef.current.recordPoseFrame({
           timestamp: Date.now(),
           nodeIndex: session.nodeIndex,
           stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
@@ -232,6 +232,12 @@ function GamePlayerInner({
             leftHandLandmarks: pose.leftHandLandmarks ?? null,
             rightHandLandmarks: pose.rightHandLandmarks ?? null,
           },
+        }); */
+        telemetryRef.current.recordPoseFrame({
+          timestamp: Date.now(),
+          nodeIndex: session.nodeIndex,
+          stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
+          poseData: pose ?? null,
         });
       }
     },
