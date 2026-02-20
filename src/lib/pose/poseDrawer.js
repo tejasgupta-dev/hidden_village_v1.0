@@ -276,7 +276,8 @@ const draw = {
   },
 
   face(poseData, ctx, { width, height }) {
-    if (!poseData.faceLandmarks) return;
+    const face = poseData?.faceLandmarks;
+    if (!Array.isArray(face) || face.length === 0) return;
 
     const oval = FACEMESH_FACE_OVAL
       .map(([idx]) => {
@@ -287,9 +288,12 @@ const draw = {
       })
       .filter(Boolean);
 
-    // keep neutral for now (no segmentName)
-    drawPath(ctx, oval, null, null);
+    // Need at least 3 points to draw anything meaningful
+    if (oval.length >= 3) {
+      drawPath(ctx, oval, null, null);
+    }
 
+    // Draw points safely
     ctx.fillStyle = "#93c5fd";
     ctx.strokeStyle = "#60a5fa";
     ctx.lineWidth = 1;
