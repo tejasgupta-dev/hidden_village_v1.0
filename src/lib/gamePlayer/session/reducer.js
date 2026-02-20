@@ -202,6 +202,8 @@ export function applyCommand(session, name, payload) {
       return next;
     }
 
+    /* ---------------------- Intuition (true/false) ---------------------- */
+
     case "TRUE_FALSE_SELECTED": {
       const answer = typeof payload?.answer === "boolean" ? payload.answer : null;
 
@@ -223,6 +225,11 @@ export function applyCommand(session, name, payload) {
         at: next.time.now,
         nodeIndex: next.nodeIndex,
         stateType: nodeType(currentNode(next)),
+
+        selectedValue: answer,
+        selectedLabel: answer === true ? "True" : answer === false ? "False" : null,
+
+        // keep your existing fields too
         answer,
         question: next.intuition?.question,
       });
@@ -230,13 +237,78 @@ export function applyCommand(session, name, payload) {
       return next;
     }
 
+    /* ---------------------- Insight (option choice) ---------------------- */
+    /**
+     * Payload suggestions (use whatever you already have):
+     * {
+     *   optionIndex: number,
+     *   optionId: string,
+     *   optionText: string,
+     *   question: string,
+     *   prompt: string,
+     *   value: any
+     * }
+     */
+    case "INSIGHT_OPTION_SELECTED": {
+      const optionIndex = Number.isFinite(Number(payload?.optionIndex))
+        ? Number(payload.optionIndex)
+        : null;
+
+      const optionId = payload?.optionId ?? null;
+      const optionText = payload?.optionText ?? payload?.text ?? null;
+
+      const question =
+        payload?.question ??
+        payload?.prompt ??
+        session?.node?.question ??
+        session?.node?.prompt ??
+        null;
+
+      const value = payload?.value ?? null;
+
+      let next = {
+        ...session,
+        insight: {
+          optionIndex,
+          optionId,
+          optionText,
+          value,
+          question,
+          levelId: payload?.levelId ?? session.levelId ?? null,
+          gameId: payload?.gameId ?? session.gameId ?? null,
+          nodeIndex: payload?.nodeIndex ?? session.nodeIndex ?? null,
+          levelIndex: payload?.levelIndex ?? session.levelIndex ?? null,
+          at: payload?.at ?? Date.now(),
+        },
+      };
+
+      next = emitTelemetry(next, {
+        type: "INSIGHT_OPTION_SELECTED",
+        at: next.time.now,
+        nodeIndex: next.nodeIndex,
+        stateType: nodeType(currentNode(next)),
+        selectedValue: value ?? optionId ?? optionIndex,
+        selectedLabel: optionText,
+        optionIndex,
+        optionId,
+        optionText,
+        value,
+        question,
+      });
+
+      return next;
+    }
+
+    /* ---------------------- Pose match scoring (no telemetry) ---------------------- */
 
     case "POSE_MATCH_SCORES": {
       const overall = Number(payload?.overall ?? 0);
       const perSegment = Array.isArray(payload?.perSegment) ? payload.perSegment : [];
       const thresholdPct = Number(payload?.thresholdPct ?? 70);
       const targetPoseId = payload?.targetPoseId ?? null;
-      const stepIndex = Number.isFinite(Number(payload?.stepIndex)) ? Number(payload.stepIndex) : null;
+      const stepIndex = Number.isFinite(Number(payload?.stepIndex))
+        ? Number(payload.stepIndex)
+        : null;
 
       const matched = overall >= thresholdPct;
 
@@ -368,10 +440,20 @@ function goNextNode(session, { reason } = {}) {
   if (nextIndex >= (session.levelStateNodes?.length ?? 0)) {
     let done = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
 
+    // keep if you want (you can filter it out in the emitter)
     done = emitTelemetry(done, {
       type: "LEVEL_COMPLETE",
       at: done.time.now,
       levelId: done.levelId,
+    });
+
+    // Add a session end marker here (safe + deterministic)
+    done = emitTelemetry(done, {
+      type: "SESSION_END",
+      at: done.time.now,
+      levelId: done.levelId,
+      gameId: done.gameId,
+      playId: done.playId,
     });
 
     return pushEffect(done, { type: "ON_COMPLETE" });

@@ -42,8 +42,55 @@ async function sleep(ms) {
 /**
  * ✅ Prevent duplicate "startup" telemetry per playId even if GamePlayerInner remounts
  * (e.g., dev StrictMode mount/unmount/mount).
+ *
+ * NOTE: We are no longer suppressing events by type here — the allowlist below is
+ * the single source of truth for what gets emitted/stored/displayed.
  */
 const __startupTelemetrySentForPlay = new Set();
+
+/**
+ * ✅ Single, clean allowlist for what gets emitted (stored/displayed).
+ * Add new events later by adding strings here.
+ *
+ * Pose match events: keep auto/click next/finish and ensure pose step+id are included.
+ * Intuition: TRUE_FALSE_SELECTED
+ * Insight: INSIGHT_OPTION_SELECTED (make sure your reducer emits this type)
+ */
+const TELEMETRY_ALLOWED = new Set([
+  // session + state lifecycle
+  "SESSION_START",
+  "SESSION_END",
+  "STATE_ENTER",
+  "STATE_EXIT",
+
+  // pose match flow (keep these)
+  "POSE_MATCH_AUTO_NEXT",
+  "POSE_MATCH_CLICK_NEXT",
+  "POSE_MATCH_AUTO_FINISH",
+  "POSE_MATCH_CLICK_FINISH",
+
+  // intuition + insight selections
+  "TRUE_FALSE_SELECTED",
+  "INSIGHT_OPTION_SELECTED",
+]);
+
+function enrichTelemetryEventWithSession(evt, session) {
+  if (!evt || typeof evt !== "object") return evt;
+
+  // If you want pose index/id *always* attached on pose events,
+  // fill from session as a fallback.
+  const isPoseEvt =
+    typeof evt.type === "string" &&
+    (evt.type.startsWith("POSE_MATCH_") || evt.type.startsWith("POSE_"));
+
+  if (!isPoseEvt) return evt;
+
+  const stepIndex =
+    evt.stepIndex ?? (Number.isFinite(Number(session?.stepIndex)) ? session.stepIndex : null);
+  const targetPoseId = evt.targetPoseId ?? session?.poseMatch?.targetPoseId ?? null;
+
+  return { ...evt, stepIndex, targetPoseId };
+}
 
 export default function GamePlayerRoot({
   game,
@@ -186,6 +233,9 @@ function GamePlayerInner({
   const cameraRecorderRef = useRef(null);
   const startedCameraRef = useRef(false);
 
+  // To avoid emitting SESSION_END twice (unmount + onComplete)
+  const sessionEndedRef = useRef(false);
+
   // Telemetry bus — guaranteed to use the real playId
   useEffect(() => {
     const bus = createTelemetryBus({ playId });
@@ -198,6 +248,7 @@ function GamePlayerInner({
       telemetryRef.current = null;
     };
   }, [playId]);
+
 
   // ✅ Create camera recorder when playId exists
   useEffect(() => {
@@ -243,6 +294,7 @@ function GamePlayerInner({
     onTick: ({ now, dt, elapsed }) => {
       dispatch(commands.tick({ now, dt, elapsed }));
 
+      // ✅ Pose frames still stored exactly as before
       if (shouldRecordPoseRef.current && telemetryRef.current && poseDataRef.current) {
         const pose = poseDataRef.current;
 
@@ -271,7 +323,7 @@ function GamePlayerInner({
 
     for (const eff of session.effects) {
       if (eff.type === "TELEMETRY_EVENT") {
-        const evt = eff.event;
+        let evt = eff.event;
 
         // ✅ Start camera recording once, at first real STATE_ENTER
         if (!startedCameraRef.current && evt?.type === "STATE_ENTER") {
@@ -281,45 +333,43 @@ function GamePlayerInner({
             .catch((e) => console.error("Camera recorder start failed:", e));
         }
 
-        // Only suppress the startup-ish ones after the first time
-        if (startupAlreadySent) {
-          if (evt?.type === "SESSION_START" || evt?.type === "STATE_ENTER") continue;
+        // Optional StrictMode guard: if your reducer emits duplicate SESSION_START/STATE_ENTER
+        // on remount, this prevents double-emitting just those startup-ish ones.
+        const isInitEnter =
+          evt?.type === "STATE_ENTER" &&
+          evt?.nodeIndex === 0 &&
+          (evt?.reason === "INIT" || evt?.reason === "INIT_MOUNT" || evt?.reason === "INIT_SESSION");
+
+        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter)) {
+          continue;
         }
+
+        // ✅ Only emit/store what you explicitly allow
+        if (!evt?.type || !TELEMETRY_ALLOWED.has(evt.type)) continue;
+
+        // ✅ Ensure pose stepIndex/targetPoseId are attached on pose events
+        evt = enrichTelemetryEventWithSession(evt, session);
 
         const { type, at, ...payload } = evt || {};
         bus.emitEvent(type, { ...payload, playId }, at ?? Date.now());
+        continue;
       }
 
       if (eff.type === "POSE_RECORDING_HINT") {
-        // Always toggle recording — do NOT skip this after startup.
+        // Keep pose recording behavior — but do NOT emit this as a telemetry event
         shouldRecordPoseRef.current = !!eff.enabled;
-
-        if (!startupAlreadySent) {
-          bus.emitEvent("POSE_RECORDING_HINT", {
-            playId,
-            enabled: !!eff.enabled,
-            stateType: eff.stateType,
-            nodeIndex: eff.nodeIndex,
-          });
-        }
+        continue;
       }
 
       if (eff.type === "ON_COMPLETE") {
-        bus.emitEvent("PLAY_COMPLETE", {
-          playId,
-          levelId: session.levelId,
-          gameId: session.gameId,
-        });
-
-        // ✅ Stop and download local camera recording
         cameraRecorderRef.current?.stopAndDownload?.().catch(() => {});
-
         onComplete?.();
+        continue;
       }
     }
 
     dispatch(commands.consumeEffects());
-  }, [session.effects, session.levelId, session.gameId, onComplete, playId]);
+  }, [session.effects, session.levelId, session.gameId, session.nodeIndex, onComplete, playId]);
 
   const level = game.levels?.[levelIndex];
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
