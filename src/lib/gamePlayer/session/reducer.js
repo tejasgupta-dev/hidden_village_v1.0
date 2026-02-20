@@ -26,6 +26,39 @@ function isSteppedPoseType(t) {
   return t === STATE_TYPES.POSE_MATCH;
 }
 
+/* ----------------------------- pose threshold helpers ----------------------------- */
+
+// Accept 0..1 or 0..100; output 0..100
+function toPct(value) {
+  const t = Number(value);
+  if (!Number.isFinite(t)) return null;
+  return t <= 1 ? t * 100 : t;
+}
+
+function clampPct(v, fallback = 70) {
+  const n = toPct(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, n));
+}
+
+function getPoseThresholdPctForStep(node, stepIndex, fallback = 70) {
+  // 1) node.poseTolerances[stepIndex]
+  const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
+  const fromArray =
+    arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
+  if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
+    return clampPct(fromArray, fallback);
+  }
+
+  // 2) node.defaultTolerance / node.threshold
+  const nodeDefault = node?.defaultTolerance ?? node?.threshold;
+  if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") {
+    return clampPct(nodeDefault, fallback);
+  }
+
+  return fallback;
+}
+
 /* ----------------------------- eventId helpers ----------------------------- */
 
 function baseEventId(session) {
@@ -63,6 +96,7 @@ function emitTelemetry(session, evt) {
 /* ----------------------------- public API ----------------------------- */
 
 export function createInitialSession({ game, initialLevel = 0, playId = null }) {
+  console.log("reducer game log:  ", game);
   let session = createSession({
     game,
     playId,
@@ -168,12 +202,113 @@ export function applyCommand(session, name, payload) {
       return next;
     }
 
+    /* ---------------------- Intuition (true/false) ---------------------- */
+
+    case "TRUE_FALSE_SELECTED": {
+      const answer = typeof payload?.answer === "boolean" ? payload.answer : null;
+
+      let next = {
+        ...session,
+        intuition: {
+          answer,
+          question: payload?.question ?? null,
+          levelId: payload?.levelId ?? session.levelId ?? null,
+          gameId: payload?.gameId ?? session.gameId ?? null,
+          nodeIndex: payload?.nodeIndex ?? session.nodeIndex ?? null,
+          levelIndex: payload?.levelIndex ?? session.levelIndex ?? null,
+          at: payload?.at ?? Date.now(),
+        },
+      };
+
+      next = emitTelemetry(next, {
+        type: "TRUE_FALSE_SELECTED",
+        at: next.time.now,
+        nodeIndex: next.nodeIndex,
+        stateType: nodeType(currentNode(next)),
+
+        selectedValue: answer,
+        selectedLabel: answer === true ? "True" : answer === false ? "False" : null,
+
+        // keep your existing fields too
+        answer,
+        question: next.intuition?.question,
+      });
+
+      return next;
+    }
+
+    /* ---------------------- Insight (option choice) ---------------------- */
+    /**
+     * Payload suggestions (use whatever you already have):
+     * {
+     *   optionIndex: number,
+     *   optionId: string,
+     *   optionText: string,
+     *   question: string,
+     *   prompt: string,
+     *   value: any
+     * }
+     */
+    case "INSIGHT_OPTION_SELECTED": {
+      const optionIndex = Number.isFinite(Number(payload?.optionIndex))
+        ? Number(payload.optionIndex)
+        : null;
+
+      const optionId = payload?.optionId ?? null;
+      const optionText = payload?.optionText ?? payload?.text ?? null;
+
+      const question =
+        payload?.question ??
+        payload?.prompt ??
+        session?.node?.question ??
+        session?.node?.prompt ??
+        null;
+
+      const value = payload?.value ?? null;
+
+      let next = {
+        ...session,
+        insight: {
+          optionIndex,
+          optionId,
+          optionText,
+          value,
+          question,
+          levelId: payload?.levelId ?? session.levelId ?? null,
+          gameId: payload?.gameId ?? session.gameId ?? null,
+          nodeIndex: payload?.nodeIndex ?? session.nodeIndex ?? null,
+          levelIndex: payload?.levelIndex ?? session.levelIndex ?? null,
+          at: payload?.at ?? Date.now(),
+        },
+      };
+
+      next = emitTelemetry(next, {
+        type: "INSIGHT_OPTION_SELECTED",
+        at: next.time.now,
+        nodeIndex: next.nodeIndex,
+        stateType: nodeType(currentNode(next)),
+        selectedValue: value ?? optionId ?? optionIndex,
+        selectedLabel: optionText,
+        optionIndex,
+        optionId,
+        optionText,
+        value,
+        question,
+      });
+
+      return next;
+    }
+
+    /* ---------------------- Pose match scoring (no telemetry) ---------------------- */
+
     case "POSE_MATCH_SCORES": {
       const overall = Number(payload?.overall ?? 0);
       const perSegment = Array.isArray(payload?.perSegment) ? payload.perSegment : [];
       const thresholdPct = Number(payload?.thresholdPct ?? 70);
       const targetPoseId = payload?.targetPoseId ?? null;
-      const stepIndex = Number.isFinite(Number(payload?.stepIndex)) ? Number(payload.stepIndex) : null;
+      const stepIndex = Number.isFinite(Number(payload?.stepIndex))
+        ? Number(payload.stepIndex)
+        : null;
 
       const matched = overall >= thresholdPct;
 
@@ -223,6 +358,8 @@ function cancelNodeTimers(session, nodeIndex) {
 
 function enterNode(session, nodeIndex, { reason } = {}) {
   const node = session.levelStateNodes?.[nodeIndex] ?? null;
+  console.log("POSE NODE", node?.type, node?.poseIds?.length, node?.poseTolerances);
+
   const t = nodeType(node);
 
   let next = {
@@ -237,16 +374,22 @@ function enterNode(session, nodeIndex, { reason } = {}) {
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
 
+  // ✅ IMPORTANT: initialize poseMatch using node poseIds + node.poseTolerances[0]
   if (t === STATE_TYPES.POSE_MATCH) {
+    const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
+    const initialStep = 0;
+    const initialTargetPoseId = poseIds[initialStep] ?? null;
+    const initialThresholdPct = getPoseThresholdPctForStep(node, initialStep, 70);
+
     next = {
       ...next,
       poseMatch: {
         overall: 0,
         perSegment: [],
-        thresholdPct: 70,
+        thresholdPct: initialThresholdPct,
         matched: false,
-        targetPoseId: null,
-        stepIndex: 0,
+        targetPoseId: initialTargetPoseId,
+        stepIndex: initialStep,
         updatedAt: next.time.now,
       },
     };
@@ -297,10 +440,20 @@ function goNextNode(session, { reason } = {}) {
   if (nextIndex >= (session.levelStateNodes?.length ?? 0)) {
     let done = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
 
+    // keep if you want (you can filter it out in the emitter)
     done = emitTelemetry(done, {
       type: "LEVEL_COMPLETE",
       at: done.time.now,
       levelId: done.levelId,
+    });
+
+    // Add a session end marker here (safe + deterministic)
+    done = emitTelemetry(done, {
+      type: "SESSION_END",
+      at: done.time.now,
+      levelId: done.levelId,
+      gameId: done.gameId,
+      playId: done.playId,
     });
 
     return pushEffect(done, { type: "ON_COMPLETE" });
@@ -389,13 +542,15 @@ function handleNext(session, payload) {
     const matched = !!session.poseMatch?.matched;
 
     if (!isManualClick && !matched) {
-      // auto path blocked unless matched
       return session;
     }
 
     if (i + 1 < poseIds.length) {
       const nextStep = i + 1;
       const nextTargetPoseId = poseIds[nextStep] ?? null;
+
+      // ✅ IMPORTANT: update thresholdPct for the NEXT step from node.poseTolerances[nextStep]
+      const nextThresholdPct = getPoseThresholdPctForStep(node, nextStep, 70);
 
       let s = {
         ...session,
@@ -407,7 +562,7 @@ function handleNext(session, payload) {
           perSegment: [],
           matched: false,
           targetPoseId: nextTargetPoseId,
-          thresholdPct: session.poseMatch?.thresholdPct ?? 70,
+          thresholdPct: nextThresholdPct, // ✅ FIX
           stepIndex: nextStep,
           updatedAt: session.time.now,
         },
@@ -420,6 +575,7 @@ function handleNext(session, payload) {
         stateType: t,
         stepIndex: s.stepIndex,
         targetPoseId: nextTargetPoseId,
+        thresholdPct: nextThresholdPct,
       });
 
       s = scheduleCursor(s);
@@ -448,7 +604,6 @@ function applyTimer(session, timer) {
     }
 
     case "AUTO_NEXT":
-      // ✅ auto-advance should not bypass match rules
       return handleNext(session, { source: "auto" });
 
     case "AUTO_ADVANCE":

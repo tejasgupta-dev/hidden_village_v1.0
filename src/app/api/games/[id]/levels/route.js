@@ -80,11 +80,14 @@ export async function GET(req, context) {
           answers: level.answers ?? [],
           keywords: level.keywords ?? "",
           poses: level.poses ?? {},
+          poseTolerancePctById: level.poseTolerancePctById ?? {},
+          poseThreshold: level.poseThreshold ?? 60,
+          poseDurationMS: level.poseDurationMS ?? null,
+          tweenDurationMS: level.tweenDurationMS ?? null,
         };
+
       })
       .filter((level) => level !== null); // Remove null entries for missing levels
-
-    console.log(`Returned ${levels.length} levels for game ${id}`);
 
     return NextResponse.json({
       success: true,

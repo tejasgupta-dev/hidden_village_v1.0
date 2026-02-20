@@ -24,24 +24,6 @@ const DEFAULT_SETTINGS = {
   },
 };
 
-function unwrapDoc(maybeDoc) {
-  if (!maybeDoc) return { id: null, data: null };
-
-  if (typeof maybeDoc?.data === "function") {
-    return { id: maybeDoc?.id ?? null, data: maybeDoc.data() ?? null };
-  }
-
-  if (
-    maybeDoc?.data &&
-    typeof maybeDoc.data === "object" &&
-    !Array.isArray(maybeDoc.data)
-  ) {
-    return { id: maybeDoc?.id ?? null, data: maybeDoc.data };
-  }
-
-  return { id: maybeDoc?.id ?? null, data: maybeDoc };
-}
-
 export function createSession({
   game,
   playId = null,
@@ -53,41 +35,39 @@ export function createSession({
   }
 
   const levels = Array.isArray(game.levels) ? game.levels : [];
+  console.log("createsession levels:  ", levels)
 
   const levelIndex =
     typeof initialLevel === "number" && initialLevel >= 0 ? initialLevel : 0;
 
-  const levelRaw = levels[levelIndex];
-  if (!levelRaw) {
+  const levelObj = levels[levelIndex] ?? null;
+  if (!levelObj) {
     throw new Error(`createSession: level not found at index ${levelIndex}`);
   }
 
-  // Important: level might be a Firestore doc or plain object
-  const { data: levelObj } = unwrapDoc(levelRaw);
-
+  // ✅ RTDB: levels are plain objects
   const settings = mergeSettings(DEFAULT_SETTINGS, levelObj?.settings ?? {});
 
-  // Prefer explicit authored nodes if you ever add them later (on level)
+  // ✅ RTDB: there are no authored nodes in DB (but keep support if you add later)
   let levelStateNodes =
     levelObj?.stateNodes ??
     levelObj?.states ??
     levelObj?.nodes ??
     null;
 
-  // ✅ Build nodes dynamically (do NOT use storyRaw; builder reads game.storyline[levelIndex])
+  // ✅ Always build dynamically if none provided
   if (!Array.isArray(levelStateNodes) || levelStateNodes.length === 0) {
     levelStateNodes = buildStateNodesForLevel({
-      level: levelRaw,   // pass raw, builder can unwrap
-      story: game,       // ✅ pass full game (contains storyline array)
-      levelIndex,        // ✅ builder selects storyline[levelIndex]
+      level: levelObj,  // ✅ pass plain object
+      story: game,      // ✅ full game (contains storyline)
+      levelIndex,
     });
   }
 
   if (!Array.isArray(levelStateNodes)) levelStateNodes = [];
 
-  // No defaults: if builder produced nothing, fail loudly with a helpful message
   if (levelStateNodes.length === 0) {
-    const lvlId = levelObj?.id ?? unwrapDoc(levelRaw).id ?? "(missing id)";
+    const lvlId = levelObj?.id ?? `(index ${levelIndex})`;
     throw new Error(
       `No playable states for level ${lvlId}. ` +
         `Expected: game.storyline[${levelIndex}] to include intro/outro dialogues ` +
@@ -107,7 +87,7 @@ export function createSession({
 
     playId,
     gameId: game.id ?? null,
-    levelId: levelObj?.id ?? unwrapDoc(levelRaw).id ?? null,
+    levelId: levelObj?.id ?? null,
 
     game,
     levelIndex,

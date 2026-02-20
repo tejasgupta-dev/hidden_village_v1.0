@@ -2,34 +2,27 @@
 
 import { STATE_TYPES } from "@/lib/gamePlayer/states/_shared/stateTypes";
 
-/**
- * Build stateNodes from:
- * - game.storyline[levelIndex] -> intro/outro dialogues (per level)
- * - level (game.levels[levelIndex]) -> poses map (object)
- *
- * We do NOT store stateNodes in Firebase.
- *
- * ✅ Behavior:
- * - ONE TWEEN node for all poses (poseIds[])
- * - ONE POSE_MATCH node for all poses (poseIds[])
- */
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
 
-function unwrapDoc(maybeDoc) {
-  if (!maybeDoc) return { id: null, data: null };
+function clamp(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
 
-  if (typeof maybeDoc?.data === "function") {
-    return { id: maybeDoc?.id ?? null, data: maybeDoc.data() ?? null };
-  }
+// Accept 0..1 or 0..100; output 0..100
+function toPct(value) {
+  const t = Number(value);
+  if (!Number.isFinite(t)) return null;
+  return t <= 1 ? t * 100 : t;
+}
 
-  if (
-    maybeDoc?.data &&
-    typeof maybeDoc.data === "object" &&
-    !Array.isArray(maybeDoc.data)
-  ) {
-    return { id: maybeDoc?.id ?? null, data: maybeDoc.data };
-  }
-
-  return { id: maybeDoc?.id ?? null, data: maybeDoc };
+function clampPct(v, fallback = 60) {
+  const n = toPct(v);
+  if (!Number.isFinite(n)) return fallback;
+  return clamp(n, 0, 100);
 }
 
 function normalizeDialogueLines(raw) {
@@ -52,19 +45,39 @@ function normalizeDialogueLines(raw) {
     .filter((x) => String(x.text ?? "").trim().length > 0);
 }
 
+function normalizeOptions(raw) {
+  if (!raw) return [];
+
+  // Array: ["A","B"] or [{text:"A"}]
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) => {
+        if (typeof x === "string") return x.trim();
+        if (x && typeof x === "object") return String(x.text ?? x.label ?? "").trim();
+        return "";
+      })
+      .filter((s) => s.length > 0);
+  }
+
+  // RTDB object: {0:"A",1:"B"} or {a:"A"}
+  if (isPlainObject(raw)) {
+    return Object.values(raw)
+      .map((v) => (typeof v === "string" ? v.trim() : String(v?.text ?? v?.label ?? "").trim()))
+      .filter((s) => s.length > 0);
+  }
+
+  return [];
+}
+
 function getPoseIds(level) {
   const poses = level?.poses;
   if (!poses) return [];
 
-  // If it ever becomes an array later, support that too
   if (Array.isArray(poses)) {
-    return poses
-      .map((p) => p?.id ?? p?.poseId ?? p?.key ?? null)
-      .filter(Boolean);
+    return poses.map((p) => p?.id ?? p?.poseId ?? p?.key ?? null).filter(Boolean);
   }
 
   if (typeof poses === "object") {
-    // stable ordering: sort by numeric suffix in "pose_<timestamp>"
     return Object.keys(poses)
       .filter(Boolean)
       .sort((a, b) => {
@@ -134,18 +147,37 @@ function resolveAutoAdvanceMS({ storyLevel, level }, nodeType) {
   return storyLevel?.autoAdvanceMS ?? level?.autoAdvanceMS ?? undefined;
 }
 
-export function buildStateNodesForLevel({
-  level: levelInput,
-  story: gameInput,
-  levelIndex = 0,
-}) {
-  const { id: levelDocId, data: level } = unwrapDoc(levelInput);
-  const { id: gameDocId, data: game } = unwrapDoc(gameInput);
+function resolveDefaultPoseTolerance({ storyLevel, level }) {
+  return clampPct(level?.poseThreshold ?? storyLevel?.poseThreshold ?? 60, 60);
+}
+
+function resolvePoseTolerances({ storyLevel, level }, poseIds) {
+  const defaultTol = resolveDefaultPoseTolerance({ storyLevel, level });
+
+  const mapA = isPlainObject(level?.poseTolerancePctById) ? level.poseTolerancePctById : null;
+  const mapB = isPlainObject(level?.poseTolerancesById) ? level.poseTolerancesById : null;
+
+  return poseIds.map((poseId) => {
+    const raw =
+      (mapA && Object.prototype.hasOwnProperty.call(mapA, poseId) ? mapA[poseId] : undefined) ??
+      (mapB && Object.prototype.hasOwnProperty.call(mapB, poseId) ? mapB[poseId] : undefined);
+
+    if (raw === undefined || raw === null || raw === "") return defaultTol;
+    return clampPct(raw, defaultTol);
+  });
+}
+
+export function buildStateNodesForLevel({ level: levelInput, story: gameInput, levelIndex = 0 }) {
+  // ✅ RTDB: treat as plain objects
+  const level = levelInput ?? null;
+  const game = gameInput ?? null;
 
   const nodes = [];
 
-  const storyLevel =
-    Array.isArray(game?.storyline) ? game.storyline[levelIndex] ?? null : null;
+  const storyLevel = Array.isArray(game?.storyline) ? game.storyline[levelIndex] ?? null : null;
+
+  const levelId = level?.id ?? null;
+  const gameId = game?.id ?? null;
 
   // 1) INTRO
   const introLines = normalizeDialogueLines(storyLevel?.intro);
@@ -155,41 +187,85 @@ export function buildStateNodesForLevel({
       lines: introLines,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.INTRO),
       autoAdvanceMS: resolveAutoAdvanceMS({ storyLevel, level }, STATE_TYPES.INTRO),
-      levelId: level?.id ?? levelDocId ?? null,
-      gameId: game?.id ?? gameDocId ?? null,
+      levelId,
+      gameId,
     });
   }
 
-  // 2) POSES
+  // 2) Question-derived nodes (INTUITION / INSIGHT)
+  const question = String(level?.question ?? "").trim();
+  const hasQuestion = question.length > 0;
+
+  // ✅ strict boolean only
+  const trueFalseEnabled = level?.trueFalseEnabled === true;
+
+  const optionsRaw = level?.options ?? null;
+  const options = normalizeOptions(optionsRaw);
+  const hasOptions = options.length >= 1;
+
+  // Debug
+  console.log("buildstatenodes log level", level)
+  console.log("[builder] question:", question, "hasQuestion:", hasQuestion);
+  console.log("[builder] trueFalseEnabled:", trueFalseEnabled);
+  console.log("[builder] options.length:", options.length);
+
+  // ✅ INTUITION only if question exists AND trueFalseEnabled
+  if (hasQuestion && trueFalseEnabled) {
+    nodes.push({
+      type: STATE_TYPES.INTUITION,
+      question,
+      trueFalseEnabled: true,
+      trueFalseAnswer: typeof level?.trueFalseAnswer === "boolean" ? level.trueFalseAnswer : null,
+      cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH),
+      levelId,
+      gameId,
+    });
+  }
+
+  // ✅ INSIGHT only if question exists AND options length >= 1
+  if (hasQuestion && hasOptions) {
+    nodes.push({
+      type: STATE_TYPES.INSIGHT,
+      question,
+      options,
+      cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH),
+      levelId,
+      gameId,
+    });
+  }
+
+  // 3) POSES
   const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
   const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  // ONE TWEEN node for all transitions (only if 2+ poses)
-  if (poseIds.length >= 2 && STATE_TYPES.TWEEN) {
-    console.log(a)
+  if (poseIds.length >= 2) {
     nodes.push({
       type: STATE_TYPES.TWEEN,
       poseIds,
       stepDurationMS: level?.tweenDurationMS ?? storyLevel?.tweenDurationMS ?? 1000,
       easing: level?.tweenEasing ?? storyLevel?.tweenEasing ?? "easeInOut",
       cursorDelayMS,
-      levelId: level?.id ?? levelDocId ?? null,
+      levelId,
     });
   }
 
-  // ✅ ONE POSE_MATCH node for all targets (only if 1+ poses)
   if (poseIds.length >= 1) {
+    const defaultTolerance = resolveDefaultPoseTolerance({ storyLevel, level });
+    const poseTolerances = resolvePoseTolerances({ storyLevel, level }, poseIds);
+
     nodes.push({
       type: STATE_TYPES.POSE_MATCH,
       poseIds,
-      threshold: level?.poseThreshold ?? storyLevel?.poseThreshold ?? 60,
+      threshold: defaultTolerance,
+      defaultTolerance,
+      poseTolerances,
       cursorDelayMS,
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
-      levelId: level?.id ?? levelDocId ?? null,
+      levelId,
     });
   }
 
-  // 3) OUTRO
+  // 4) OUTRO
   const outroLines = normalizeDialogueLines(storyLevel?.outro);
   if (outroLines.length > 0) {
     nodes.push({
@@ -197,11 +273,11 @@ export function buildStateNodesForLevel({
       lines: outroLines,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.OUTRO),
       autoAdvanceMS: resolveAutoAdvanceMS({ storyLevel, level }, STATE_TYPES.OUTRO),
-      levelId: level?.id ?? levelDocId ?? null,
-      gameId: game?.id ?? gameDocId ?? null,
+      levelId,
+      gameId,
     });
   }
 
-  console.log(nodes)
+  console.log("[builder] STATE_NODES:", nodes.map((n) => n.type));
   return nodes;
 }

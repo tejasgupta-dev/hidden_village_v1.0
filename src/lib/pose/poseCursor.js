@@ -1,25 +1,66 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export default function PoseCursor({
   poseDataRef,
   containerWidth,
   containerHeight,
-  // onClick is intentionally unused now: we only click the hovered DOM button
   sensitivity = 1.2,
   hand = "left", // "left" or "right"
   hoverSelector = ".next-button",
-  hoverThresholdMS = 200,
+
+  // default fallback if a button doesn't provide data-pose-hover-ms
+  hoverThresholdMS = 700,
+
+  // optional safety: only click elements that opt-in
+  requireOptIn = false, // if true, requires data-pose-click="true"
+
+  // jitter safety: cursor must remain on the same element continuously
+  // (already implied by our logic, but leaving here for clarity)
 }) {
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
   const [isClicking, setIsClicking] = useState(false);
 
   const hoverStartRef = useRef(null);
   const hoverElRef = useRef(null);
+
+  // store the current threshold for the hovered element
+  const hoverThresholdRef = useRef(hoverThresholdMS);
+
   const lastClickTime = useRef(0);
+  const isClickingRef = useRef(false);
 
   const CLICK_COOLDOWN_MS = 600;
+
+  const safePerfNow = () =>
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+
+  function readHoverMS(el) {
+    const raw = el?.getAttribute?.("data-pose-hover-ms");
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+    return hoverThresholdMS;
+  }
+
+  function isDisabledEl(el) {
+    return (
+      (typeof el.disabled === "boolean" && el.disabled) ||
+      el.getAttribute?.("aria-disabled") === "true"
+    );
+  }
+
+  function setElProgress(el, progress01) {
+    try {
+      el?.style?.setProperty("--pose-progress", String(progress01));
+    } catch {}
+  }
+
+  function clearElProgress(el) {
+    try {
+      el?.style?.removeProperty("--pose-progress");
+    } catch {}
+  }
 
   useEffect(() => {
     let rafId;
@@ -31,9 +72,16 @@ export default function PoseCursor({
 
       // If no hand, stop hover tracking (no click)
       if (!handLm?.[8]) {
+        // clear progress on the last hovered element
+        if (hoverElRef.current) clearElProgress(hoverElRef.current);
+
         hoverStartRef.current = null;
         hoverElRef.current = null;
+        hoverThresholdRef.current = hoverThresholdMS;
+
         setIsClicking(false);
+        isClickingRef.current = false;
+
         rafId = requestAnimationFrame(loop);
         return;
       }
@@ -62,59 +110,77 @@ export default function PoseCursor({
       const hoverTarget = elementsAtPoint.find((el) => {
         try {
           if (!el.matches?.(hoverSelector)) return false;
-
-          // ignore disabled buttons
-          const isDisabled =
-            // native disabled
-            (typeof el.disabled === "boolean" && el.disabled) ||
-            // aria disabled
-            el.getAttribute?.("aria-disabled") === "true";
-
-          return !isDisabled;
+          if (requireOptIn && el.getAttribute?.("data-pose-click") !== "true") return false;
+          if (isDisabledEl(el)) return false;
+          return true;
         } catch {
           return false;
         }
       });
 
-      // ✅ ONLY hover-to-click the actual button
-      if (hoverTarget) {
-        const nowPerf = performance.now();
+      const nowPerf = safePerfNow();
 
-        // new target: start timer
+      if (hoverTarget) {
+        // new target: reset timer + progress on old element
         if (hoverElRef.current !== hoverTarget) {
+          if (hoverElRef.current) clearElProgress(hoverElRef.current);
+
           hoverElRef.current = hoverTarget;
           hoverStartRef.current = nowPerf;
+
+          const threshold = readHoverMS(hoverTarget);
+          hoverThresholdRef.current = threshold;
+
+          // set initial progress
+          setElProgress(hoverTarget, 0);
         } else {
           const started = hoverStartRef.current ?? nowPerf;
+          const threshold = hoverThresholdRef.current ?? hoverThresholdMS;
 
-          if (nowPerf - started >= hoverThresholdMS) {
+          const elapsed = nowPerf - started;
+          const progress = threshold > 0 ? Math.min(1, elapsed / threshold) : 1;
+
+          // ✅ drive button progress bar via CSS var
+          setElProgress(hoverTarget, progress);
+
+          // threshold satisfied → click (with cooldown)
+          if (elapsed >= threshold) {
             const now = Date.now();
-
-            // cooldown so jitter doesn't spam clicks
             if (now - lastClickTime.current > CLICK_COOLDOWN_MS) {
               setIsClicking(true);
+              isClickingRef.current = true;
               lastClickTime.current = now;
 
-              // ✅ real DOM click so React onClick runs (exactly once)
+              // ✅ real DOM click so React onClick runs
               hoverTarget.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-              // reset hover tracking after a click
+              // reset hover tracking after click (and clear progress)
+              clearElProgress(hoverTarget);
               hoverStartRef.current = null;
               hoverElRef.current = null;
+              hoverThresholdRef.current = hoverThresholdMS;
             }
           }
         }
       } else {
-        // not hovering a valid target → no click, reset timer
+        // left all valid targets → clear progress + reset
+        if (hoverElRef.current) clearElProgress(hoverElRef.current);
+
         hoverStartRef.current = null;
         hoverElRef.current = null;
+        hoverThresholdRef.current = hoverThresholdMS;
+
         setIsClicking(false);
+        isClickingRef.current = false;
       }
 
       // reset click highlight shortly after
-      if (isClicking) {
+      if (isClickingRef.current) {
         const now = Date.now();
-        if (now - lastClickTime.current > 120) setIsClicking(false);
+        if (now - lastClickTime.current > 120) {
+          setIsClicking(false);
+          isClickingRef.current = false;
+        }
       }
 
       rafId = requestAnimationFrame(loop);
@@ -131,14 +197,18 @@ export default function PoseCursor({
     hand,
     hoverSelector,
     hoverThresholdMS,
+    requireOptIn,
   ]);
 
-  // cosmetic hover progress
-  const hoverProgress = (() => {
+  // cosmetic hover progress (for cursor color only)
+  const hoverProgress = useMemo(() => {
     if (!hoverStartRef.current) return 0;
-    const elapsed = performance.now() - hoverStartRef.current;
-    return Math.min(1, elapsed / hoverThresholdMS);
-  })();
+    const threshold = hoverThresholdRef.current ?? hoverThresholdMS;
+    if (!threshold || threshold <= 0) return 1;
+    const elapsed = safePerfNow() - hoverStartRef.current;
+    return Math.min(1, elapsed / threshold);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursorPos.x, cursorPos.y, hoverThresholdMS]);
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[1000]">
@@ -154,7 +224,7 @@ export default function PoseCursor({
           backgroundColor: isClicking
             ? "rgba(255, 0, 0, 0.6)"
             : hoverElRef.current
-            ? `rgba(255, 165, 0, ${hoverProgress})`
+            ? `rgba(0, 200, 0, ${hoverProgress})`
             : "rgba(255, 255, 255, 0.6)",
           border: "3px solid white",
           transform: "translate(-50%, -50%)",

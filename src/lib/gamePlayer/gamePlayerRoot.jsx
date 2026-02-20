@@ -8,6 +8,8 @@ import { createInitialSession, sessionReducer } from "@/lib/gamePlayer/session/r
 import { createTelemetryBus } from "@/lib/gamePlayer/telemetry/telemetryBus";
 import { STATE_TYPES, normalizeStateType } from "@/lib/gamePlayer/states/_shared/stateTypes";
 
+import { createLocalCameraRecorder } from "./telemetry/localCameraRecorder";
+
 import PoseCursor from "@/lib/pose/poseCursor";
 import PoseDrawer from "@/lib/pose/poseDrawer";
 import getPoseData from "@/lib/mediapipe/getPoseData";
@@ -41,9 +43,54 @@ async function sleep(ms) {
  * ✅ Prevent duplicate "startup" telemetry per playId even if GamePlayerInner remounts
  * (e.g., dev StrictMode mount/unmount/mount).
  *
- * Module scope survives remounts within the same tab session.
+ * NOTE: We are no longer suppressing events by type here — the allowlist below is
+ * the single source of truth for what gets emitted/stored/displayed.
  */
 const __startupTelemetrySentForPlay = new Set();
+
+/**
+ * ✅ Single, clean allowlist for what gets emitted (stored/displayed).
+ * Add new events later by adding strings here.
+ *
+ * Pose match events: keep auto/click next/finish and ensure pose step+id are included.
+ * Intuition: TRUE_FALSE_SELECTED
+ * Insight: INSIGHT_OPTION_SELECTED (make sure your reducer emits this type)
+ */
+const TELEMETRY_ALLOWED = new Set([
+  // session + state lifecycle
+  "SESSION_START",
+  "SESSION_END",
+  "STATE_ENTER",
+  "STATE_EXIT",
+
+  // pose match flow (keep these)
+  "POSE_MATCH_AUTO_NEXT",
+  "POSE_MATCH_CLICK_NEXT",
+  "POSE_MATCH_AUTO_FINISH",
+  "POSE_MATCH_CLICK_FINISH",
+
+  // intuition + insight selections
+  "TRUE_FALSE_SELECTED",
+  "INSIGHT_OPTION_SELECTED",
+]);
+
+function enrichTelemetryEventWithSession(evt, session) {
+  if (!evt || typeof evt !== "object") return evt;
+
+  // If you want pose index/id *always* attached on pose events,
+  // fill from session as a fallback.
+  const isPoseEvt =
+    typeof evt.type === "string" &&
+    (evt.type.startsWith("POSE_MATCH_") || evt.type.startsWith("POSE_"));
+
+  if (!isPoseEvt) return evt;
+
+  const stepIndex =
+    evt.stepIndex ?? (Number.isFinite(Number(session?.stepIndex)) ? session.stepIndex : null);
+  const targetPoseId = evt.targetPoseId ?? session?.poseMatch?.targetPoseId ?? null;
+
+  return { ...evt, stepIndex, targetPoseId };
+}
 
 export default function GamePlayerRoot({
   game,
@@ -77,11 +124,7 @@ export default function GamePlayerRoot({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({
-            gameId,
-            levelId,
-            deviceId,
-          }),
+          body: JSON.stringify({ gameId, levelId, deviceId }),
         });
 
         if (res.ok) {
@@ -170,7 +213,7 @@ export default function GamePlayerRoot({
 function GamePlayerInner({
   game,
   levelIndex,
-  deviceId,
+  deviceId, // kept for signature compat
   playId,
   onComplete,
   width,
@@ -185,6 +228,14 @@ function GamePlayerInner({
   // Required hidden video element for getPoseData
   const videoRef = useRef(null);
 
+  // ✅ Local camera+mic recorder (hidden preview)
+  const cameraPreviewRef = useRef(null);
+  const cameraRecorderRef = useRef(null);
+  const startedCameraRef = useRef(false);
+
+  // To avoid emitting SESSION_END twice (unmount + onComplete)
+  const sessionEndedRef = useRef(false);
+
   // Telemetry bus — guaranteed to use the real playId
   useEffect(() => {
     const bus = createTelemetryBus({ playId });
@@ -195,6 +246,26 @@ function GamePlayerInner({
       bus.stopAutoFlush();
       void bus.flushAll();
       telemetryRef.current = null;
+    };
+  }, [playId]);
+
+
+  // ✅ Create camera recorder when playId exists
+  useEffect(() => {
+    if (!playId) return;
+
+    cameraRecorderRef.current = createLocalCameraRecorder({
+      playId,
+      previewVideoEl: cameraPreviewRef.current, // hidden <video>
+      videoConstraints: { width: 1280, height: 720, frameRate: 30, facingMode: "user" },
+      audioConstraints: true, // mic
+    });
+
+    return () => {
+      // best-effort stop+download if unmount happens mid-play
+      cameraRecorderRef.current?.stop?.({ download: true }).catch?.(() => {});
+      cameraRecorderRef.current = null;
+      startedCameraRef.current = false;
     };
   }, [playId]);
 
@@ -223,18 +294,15 @@ function GamePlayerInner({
     onTick: ({ now, dt, elapsed }) => {
       dispatch(commands.tick({ now, dt, elapsed }));
 
+      // ✅ Pose frames still stored exactly as before
       if (shouldRecordPoseRef.current && telemetryRef.current && poseDataRef.current) {
         const pose = poseDataRef.current;
+
         telemetryRef.current.recordPoseFrame({
           timestamp: Date.now(),
-          playId,
           nodeIndex: session.nodeIndex,
           stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
-          poseData: {
-            poseLandmarks: pose.poseLandmarks ?? null,
-            leftHandLandmarks: pose.leftHandLandmarks ?? null,
-            rightHandLandmarks: pose.rightHandLandmarks ?? null,
-          },
+          poseData: pose ?? null, // ✅ full raw pose object
         });
       }
     },
@@ -250,50 +318,58 @@ function GamePlayerInner({
       return;
     }
 
-    // ✅ Only allow the startup trio once per playId (prevents "page reload" double fire)
     const startupAlreadySent = __startupTelemetrySentForPlay.has(playId);
-    if (!startupAlreadySent) {
-      __startupTelemetrySentForPlay.add(playId);
-    }
+    if (!startupAlreadySent) __startupTelemetrySentForPlay.add(playId);
 
     for (const eff of session.effects) {
       if (eff.type === "TELEMETRY_EVENT") {
-        const evt = eff.event;
+        let evt = eff.event;
 
-        if (startupAlreadySent) {
-          if (evt?.type === "SESSION_START" || evt?.type === "STATE_ENTER") {
-            continue;
-          }
+        // ✅ Start camera recording once, at first real STATE_ENTER
+        if (!startedCameraRef.current && evt?.type === "STATE_ENTER") {
+          startedCameraRef.current = true;
+          cameraRecorderRef.current
+            ?.start?.()
+            .catch((e) => console.error("Camera recorder start failed:", e));
         }
+
+        // Optional StrictMode guard: if your reducer emits duplicate SESSION_START/STATE_ENTER
+        // on remount, this prevents double-emitting just those startup-ish ones.
+        const isInitEnter =
+          evt?.type === "STATE_ENTER" &&
+          evt?.nodeIndex === 0 &&
+          (evt?.reason === "INIT" || evt?.reason === "INIT_MOUNT" || evt?.reason === "INIT_SESSION");
+
+        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter)) {
+          continue;
+        }
+
+        // ✅ Only emit/store what you explicitly allow
+        if (!evt?.type || !TELEMETRY_ALLOWED.has(evt.type)) continue;
+
+        // ✅ Ensure pose stepIndex/targetPoseId are attached on pose events
+        evt = enrichTelemetryEventWithSession(evt, session);
 
         const { type, at, ...payload } = evt || {};
         bus.emitEvent(type, { ...payload, playId }, at ?? Date.now());
+        continue;
       }
 
       if (eff.type === "POSE_RECORDING_HINT") {
-        if (startupAlreadySent) continue;
-
+        // Keep pose recording behavior — but do NOT emit this as a telemetry event
         shouldRecordPoseRef.current = !!eff.enabled;
-        bus.emitEvent("POSE_RECORDING_HINT", {
-          playId,
-          enabled: !!eff.enabled,
-          stateType: eff.stateType,
-          nodeIndex: eff.nodeIndex,
-        });
+        continue;
       }
 
       if (eff.type === "ON_COMPLETE") {
-        bus.emitEvent("PLAY_COMPLETE", {
-          playId,
-          levelId: session.levelId,
-          gameId: session.gameId,
-        });
+        cameraRecorderRef.current?.stopAndDownload?.().catch(() => {});
         onComplete?.();
+        continue;
       }
     }
 
     dispatch(commands.consumeEffects());
-  }, [session.effects, session.levelId, session.gameId, onComplete, playId, dispatch]);
+  }, [session.effects, session.levelId, session.gameId, session.nodeIndex, onComplete, playId]);
 
   const level = game.levels?.[levelIndex];
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
@@ -305,7 +381,7 @@ function GamePlayerInner({
   const rightPanelWidth = Math.max(260, Math.floor(width * 0.28));
   const leftPanelWidth = width - rightPanelWidth;
 
-  // Dialogue overlay (for intro/outro) — kept here in case your StateRenderer uses it
+  // Dialogue overlay (for intro/outro)
   const dialogueText = (() => {
     if (!isDialogueLike(type)) return "";
     const lines = session.node?.lines ?? session.node?.dialogues ?? [];
@@ -319,28 +395,22 @@ function GamePlayerInner({
     return sp?.name ?? sp ?? "";
   })();
 
-  // ✅ Similarity overlays only during POSE_MATCH
+  // Similarity overlays only during POSE_MATCH
   const rightSimilarityScores =
-    type === STATE_TYPES.POSE_MATCH ? (session.poseMatch?.perSegment ?? []) : [];
+    type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
 
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
-      <video
-        ref={videoRef}
-        className="input-video"
-        style={{ display: "none" }}
-        playsInline
-        muted
-      />
+      {/* Hidden video used for mediapipe pose detection */}
+      <video ref={videoRef} className="input-video" style={{ display: "none" }} playsInline muted />
+
+      {/* ✅ Hidden preview used for camera+mic recording */}
+      <video ref={cameraPreviewRef} style={{ display: "none" }} playsInline muted />
 
       {/* Background */}
       <div className="absolute inset-0">
         {level?.background ? (
-          <img
-            src={level.background}
-            alt=""
-            className="w-full h-full object-cover opacity-90"
-          />
+          <img src={level.background} alt="" className="w-full h-full object-cover opacity-90" />
         ) : (
           <div className="w-full h-full bg-gradient-to-b from-gray-900 to-black" />
         )}
@@ -355,7 +425,6 @@ function GamePlayerInner({
             poseDataRef={poseDataRef}
             width={leftPanelWidth}
             height={height}
-            // leaving these in case your renderer uses them (safe even if ignored)
             dialogueText={dialogueText}
             speaker={speaker}
           />
