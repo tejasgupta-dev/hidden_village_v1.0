@@ -276,28 +276,35 @@ const draw = {
   },
 
   face(poseData, ctx, { width, height }) {
-    if (!poseData.faceLandmarks) return;
+    const face = poseData?.faceLandmarks;
+    if (!Array.isArray(face) || face.length === 0) return;
 
-    const oval = FACEMESH_FACE_OVAL.map(([idx]) => {
-      const p = poseData.faceLandmarks[idx];
-      return { x: p.x * width, y: p.y * height };
-    });
+    // Some indices may be missing -> skip them
+    const oval = FACEMESH_FACE_OVAL.map(([idx]) => face[idx])
+      .filter(Boolean)
+      .map((p) => ({ x: p.x * width, y: p.y * height }))
+      .filter((pt) => Number.isFinite(pt.x) && Number.isFinite(pt.y));
 
-    // keep neutral for now (no segmentName)
-    drawPath(ctx, oval, null, null);
+    // Need at least 3 points to draw anything meaningful
+    if (oval.length >= 3) {
+      drawPath(ctx, oval, null, null);
+    }
 
+    // Draw points safely
     ctx.fillStyle = "#93c5fd";
     ctx.strokeStyle = "#60a5fa";
     ctx.lineWidth = 1;
 
-    for (const lm of poseData.faceLandmarks) {
+    for (const lm of face) {
+      if (!lm) continue;
       const x = lm.x * width;
       const y = lm.y * height;
-      if (x <= width && y <= height) {
-        ctx.beginPath();
-        ctx.arc(x, y, CIRCLE_RADIUS, 0, 2 * Math.PI);
-        ctx.fill();
-      }
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < 0 || y < 0 || x > width || y > height) continue;
+
+      ctx.beginPath();
+      ctx.arc(x, y, CIRCLE_RADIUS, 0, 2 * Math.PI);
+      ctx.fill();
     }
   },
 

@@ -8,7 +8,9 @@ import PoseCapture from "@/components/Pose/poseCapture";
  */
 export default function LevelPosesEditor({
   poses = {},
+  poseTolerancePctById = {},
   onPosesUpdate,
+  onPoseToleranceUpdate,
   onRemovePose,
   disabled = false,
 }) {
@@ -42,7 +44,13 @@ export default function LevelPosesEditor({
 
       {open && (
         <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
-          <PoseCapture poses={poses} onPosesUpdate={onPosesUpdate} />
+          <PoseCapture
+            poses={poses}
+            onPosesUpdate={onPosesUpdate}
+            poseTolerancePctById={poseTolerancePctById}
+            onPoseToleranceUpdate={onPoseToleranceUpdate}
+            disabled={disabled}
+          />
         </div>
       )}
 

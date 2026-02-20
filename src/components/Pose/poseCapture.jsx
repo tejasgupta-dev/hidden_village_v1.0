@@ -50,16 +50,28 @@ function normalizePoseRecord(value, fallbackTol = 70) {
   return null;
 }
 
-/** Convert incoming poses (stringified or object) into parsed pose-records. */
-function parseIncomingPoses(map, fallbackTol = 70) {
+/**
+ * Convert incoming poses (stringified or object) into parsed pose-records.
+ * If poseTolerancePctById contains a value for that key, it wins.
+ */
+function parseIncomingPoses(map, poseTolerancePctById, fallbackTol = 70) {
   const incoming = map && typeof map === "object" ? map : {};
+  const tolMap = poseTolerancePctById && typeof poseTolerancePctById === "object" ? poseTolerancePctById : {};
   const parsed = {};
 
   for (const [key, value] of Object.entries(incoming)) {
     try {
       const obj = typeof value === "string" ? JSON.parse(value) : value;
       const rec = normalizePoseRecord(obj, fallbackTol);
-      if (rec) parsed[key] = rec;
+      if (!rec) continue;
+
+      const externalTol = Number(tolMap?.[key]);
+      const tol =
+        Number.isFinite(externalTol)
+          ? Math.max(0, Math.min(100, externalTol))
+          : Math.max(0, Math.min(100, Number(rec.tolerancePct) || fallbackTol));
+
+      parsed[key] = { pose: rec.pose, tolerancePct: tol };
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("Error parsing pose:", key, e);
@@ -73,7 +85,6 @@ function stringifyPoses(recordsMap) {
   const out = {};
   for (const [k, rec] of Object.entries(recordsMap || {})) {
     try {
-      // store full record (pose + tolerance)
       const safe = normalizePoseRecord(rec, 70);
       if (safe) out[k] = JSON.stringify(safe);
     } catch {
@@ -101,7 +112,16 @@ function usePoseDrawerPose(poseDataRef) {
   return poseForDrawer;
 }
 
-export default function PoseCapture({ poses = {}, onPosesUpdate }) {
+export default function PoseCapture({
+  poses = {},
+  onPosesUpdate,
+
+  // ✅ NEW: external tolerance map stored on the level
+  poseTolerancePctById = {},
+  onPoseToleranceUpdate,
+
+  disabled = false,
+}) {
   // Stored poses as pose-records: key -> { pose, tolerancePct }
   const [capturedPoses, setCapturedPoses] = useState({});
 
@@ -137,7 +157,6 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
 
   /* -------------------- Pose stream hook -------------------- */
 
-  // ✅ IMPORTANT: do NOT setState here (prevents max update depth)
   const handlePoseData = useCallback((data) => {
     poseDataRef.current = data ?? null;
   }, []);
@@ -152,15 +171,19 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
   // Live pose for PoseDrawer (updated via RAF, safe)
   const poseForDrawer = usePoseDrawerPose(poseDataRef);
 
-  /* -------------------- Parent -> Local hydrate (signature guarded) -------------------- */
+  /* -------------------- Parent -> Local hydrate -------------------- */
 
   const incomingSig = useMemo(() => posesSignature(poses), [poses]);
 
-  useEffect(() => {
-    if (incomingSig === lastIncomingSigRef.current) return;
-    lastIncomingSigRef.current = incomingSig;
+  // ✅ also rehydrate if tolerance map changes (even if poses didn't)
+  const tolSig = useMemo(() => posesSignature(poseTolerancePctById), [poseTolerancePctById]);
 
-    const parsed = parseIncomingPoses(poses, 70);
+  useEffect(() => {
+    const combinedSig = `${incomingSig}__tol__${tolSig}`;
+    if (combinedSig === lastIncomingSigRef.current) return;
+    lastIncomingSigRef.current = combinedSig;
+
+    const parsed = parseIncomingPoses(poses, poseTolerancePctById, 70);
     setCapturedPoses(parsed);
 
     // If selection removed, clear it
@@ -182,9 +205,9 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incomingSig]);
+  }, [incomingSig, tolSig]);
 
-  /* -------------------- Local -> Parent sync (signature guarded) -------------------- */
+  /* -------------------- Local -> Parent sync (poses) -------------------- */
 
   const outgoingStringified = useMemo(() => stringifyPoses(capturedPoses), [capturedPoses]);
   const outgoingSig = useMemo(() => posesSignature(outgoingStringified), [outgoingStringified]);
@@ -192,7 +215,8 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
   useEffect(() => {
     if (typeof onPosesUpdate !== "function") return;
 
-    if (outgoingSig === lastIncomingSigRef.current) return;
+    // Avoid ping-pong: compare with combined incoming signature piece for poses only
+    // (We used combinedSig above; here we just avoid resending the same pose payload.)
     if (outgoingSig === lastSentSigRef.current) return;
 
     lastSentSigRef.current = outgoingSig;
@@ -212,6 +236,38 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
     [capturedPoses]
   );
 
+  const setExternalTolerance = useCallback(
+    (key, tol) => {
+      if (typeof onPoseToleranceUpdate !== "function" || !key) return;
+
+      const nextTol = Math.max(0, Math.min(100, Number(tol) || 0));
+      const prevMap =
+        poseTolerancePctById && typeof poseTolerancePctById === "object" ? poseTolerancePctById : {};
+
+      onPoseToleranceUpdate({
+        ...prevMap,
+        [key]: nextTol,
+      });
+    },
+    [onPoseToleranceUpdate, poseTolerancePctById]
+  );
+
+  const removeExternalTolerance = useCallback(
+    (key) => {
+      if (typeof onPoseToleranceUpdate !== "function" || !key) return;
+
+      const prevMap =
+        poseTolerancePctById && typeof poseTolerancePctById === "object" ? poseTolerancePctById : {};
+
+      if (!Object.prototype.hasOwnProperty.call(prevMap, key)) return;
+
+      const next = { ...prevMap };
+      delete next[key];
+      onPoseToleranceUpdate(next);
+    },
+    [onPoseToleranceUpdate, poseTolerancePctById]
+  );
+
   /* -------------------- Actions -------------------- */
 
   const handleCapture = useCallback(() => {
@@ -224,33 +280,42 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
     const key = `pose_${Date.now()}`;
     const poseCopy = JSON.parse(JSON.stringify(live)); // deep copy
 
+    const tol = Number.isFinite(Number(thresholdPct))
+      ? Math.max(0, Math.min(100, Number(thresholdPct)))
+      : 70;
+
     setCapturedPoses((prev) => ({
       ...(prev ?? {}),
-      [key]: {
-        pose: poseCopy,
-        tolerancePct: Number.isFinite(Number(thresholdPct)) ? Math.max(0, Math.min(100, Number(thresholdPct))) : 70,
-      },
+      [key]: { pose: poseCopy, tolerancePct: tol },
     }));
+
+    // ✅ ALSO persist to level.poseTolerancePctById
+    setExternalTolerance(key, tol);
 
     // UX
     setSelectedPoseKey((prev) => prev ?? key);
     setIsTestMode(false);
     setLiveMatch(null);
     setTestTargetKey((prev) => prev || key);
-  }, [thresholdPct]);
+  }, [thresholdPct, setExternalTolerance]);
 
-  const handleDelete = useCallback((key) => {
-    setCapturedPoses((prev) => {
-      const next = { ...(prev ?? {}) };
-      delete next[key];
-      return next;
-    });
+  const handleDelete = useCallback(
+    (key) => {
+      setCapturedPoses((prev) => {
+        const next = { ...(prev ?? {}) };
+        delete next[key];
+        return next;
+      });
 
-    setSelectedPoseKey((prev) => (prev === key ? null : prev));
-    setLiveMatch(null);
+      // ✅ ALSO remove from level.poseTolerancePctById
+      removeExternalTolerance(key);
 
-    setTestTargetKey((prev) => (prev === key ? "" : prev));
-  }, []);
+      setSelectedPoseKey((prev) => (prev === key ? null : prev));
+      setLiveMatch(null);
+      setTestTargetKey((prev) => (prev === key ? "" : prev));
+    },
+    [removeExternalTolerance]
+  );
 
   const handleView = useCallback((key) => {
     setSelectedPoseKey(key);
@@ -258,14 +323,21 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
     setLiveMatch(null);
   }, []);
 
-  const updatePoseTolerance = useCallback((key, nextTol) => {
-    const tol = Math.max(0, Math.min(100, Number(nextTol) || 0));
-    setCapturedPoses((prev) => {
-      const cur = prev?.[key];
-      if (!cur) return prev;
-      return { ...prev, [key]: { ...cur, tolerancePct: tol } };
-    });
-  }, []);
+  const updatePoseTolerance = useCallback(
+    (key, nextTol) => {
+      const tol = Math.max(0, Math.min(100, Number(nextTol) || 0));
+
+      setCapturedPoses((prev) => {
+        const cur = prev?.[key];
+        if (!cur) return prev;
+        return { ...prev, [key]: { ...cur, tolerancePct: tol } };
+      });
+
+      // ✅ ALSO persist to level.poseTolerancePctById
+      setExternalTolerance(key, tol);
+    },
+    [setExternalTolerance]
+  );
 
   /* -------------------- Repeated match computation (RAF + throttle) -------------------- */
 
@@ -285,7 +357,7 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
         return;
       }
 
-      // Use per-pose tolerance (stored next to pose)
+      // Use per-pose tolerance
       const tol = getTargetTolerance(testTargetKey);
 
       const match = computePoseMatch({
@@ -324,7 +396,8 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
 
   const optionInputClass =
     "border border-gray-300 p-2 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 " +
-    "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+    "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 " +
+    "disabled:opacity-50 disabled:cursor-not-allowed";
 
   /* -------------------- UI -------------------- */
 
@@ -367,6 +440,7 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                   type="button"
                   onClick={() => setSelectedPoseKey(null)}
                   className="text-xs text-blue-600 hover:text-blue-700"
+                  disabled={disabled}
                 >
                   Back to Live
                 </button>
@@ -375,7 +449,12 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
 
             <div className="border border-gray-300 rounded bg-gray-50 flex items-center justify-center overflow-hidden">
               {displayPose ? (
-                <PoseDrawer poseData={displayPose} width={width} height={height} similarityScores={similarityScores} />
+                <PoseDrawer
+                  poseData={displayPose}
+                  width={640}
+                  height={480}
+                  similarityScores={similarityScores}
+                />
               ) : (
                 <div className="h-96 flex items-center justify-center">
                   <p className="text-sm text-gray-500">No pose detected</p>
@@ -389,7 +468,7 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
             <button
               type="button"
               onClick={handleCapture}
-              disabled={!poseDataRef.current?.poseLandmarks}
+              disabled={disabled || !poseDataRef.current?.poseLandmarks}
               className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               <Circle size={14} />
@@ -409,12 +488,12 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                   }
                   const firstKey = testTargetKey || capturedKeys[0];
                   setTestTargetKey(firstKey);
-                  setThresholdPct(getTargetTolerance(firstKey)); // sync UI input to pose tolerance
+                  setThresholdPct(getTargetTolerance(firstKey));
                   setSelectedPoseKey(null);
                   setIsTestMode(true);
                 }
               }}
-              disabled={!poseDataRef.current?.poseLandmarks || capturedCount === 0}
+              disabled={disabled || !poseDataRef.current?.poseLandmarks || capturedCount === 0}
               className={[
                 "flex-1 px-3 py-2 text-white text-sm font-medium rounded flex items-center justify-center gap-2",
                 "disabled:opacity-50 disabled:cursor-not-allowed",
@@ -447,9 +526,9 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                     onChange={(e) => {
                       const k = e.target.value;
                       setTestTargetKey(k);
-                      setThresholdPct(getTargetTolerance(k)); // load stored tolerance into input
+                      setThresholdPct(getTargetTolerance(k));
                     }}
-                    disabled={capturedCount === 0}
+                    disabled={disabled || capturedCount === 0}
                   >
                     {capturedKeys.map((k) => (
                       <option key={k} value={k}>
@@ -476,13 +555,13 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                   onChange={(e) => {
                     const v = Number(e.target.value || 0);
                     setThresholdPct(v);
-                    if (testTargetKey) updatePoseTolerance(testTargetKey, v); // ✅ stored next to that pose
+                    if (testTargetKey) updatePoseTolerance(testTargetKey, v);
                   }}
                   className={`${optionInputClass} w-full`}
-                  disabled={!testTargetKey}
+                  disabled={disabled || !testTargetKey}
                 />
                 <div className="text-[11px] text-gray-500 mt-1">
-                  This is saved with the pose and used during matching.
+                  Saved to <code className="font-mono">poseTolerancePctById</code>.
                 </div>
               </div>
 
@@ -521,6 +600,7 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                     setLiveMatch(null);
                   }}
                   className="text-xs text-red-600 hover:text-red-700"
+                  disabled={disabled}
                 >
                   Stop
                 </button>
@@ -530,7 +610,9 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
 
           {/* Captured poses grid */}
           <div>
-            <h3 className="text-xs font-semibold text-gray-700 mb-2">Captured Poses ({capturedCount})</h3>
+            <h3 className="text-xs font-semibold text-gray-700 mb-2">
+              Captured Poses ({capturedCount})
+            </h3>
 
             {capturedCount === 0 ? (
               <p className="text-xs text-gray-500 text-center py-4">
@@ -547,7 +629,9 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                       key={key}
                       className={[
                         "border rounded p-2 cursor-pointer transition",
-                        selectedPoseKey === key ? "border-blue-500 bg-blue-50" : "border-gray-300 hover:border-gray-400",
+                        selectedPoseKey === key
+                          ? "border-blue-500 bg-blue-50"
+                          : "border-gray-300 hover:border-gray-400",
                       ].join(" ")}
                       onClick={() => handleView(key)}
                       role="button"
@@ -557,7 +641,12 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                       }}
                     >
                       <div className="mb-1 bg-gray-100 rounded flex items-center justify-center overflow-hidden">
-                        <PoseDrawer poseData={pose} width={thumbnailWidth} height={thumbnailHeight} similarityScores={[]} />
+                        <PoseDrawer
+                          poseData={pose}
+                          width={120}
+                          height={90}
+                          similarityScores={[]}
+                        />
                       </div>
 
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -569,8 +658,9 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                             e.stopPropagation();
                             handleDelete(key);
                           }}
-                          className="text-red-600 hover:text-red-700 shrink-0"
+                          className="text-red-600 hover:text-red-700 shrink-0 disabled:opacity-50"
                           aria-label={`Delete ${key}`}
+                          disabled={disabled}
                         >
                           <span className="text-xs">✕</span>
                         </button>
@@ -588,19 +678,21 @@ export default function PoseCapture({ poses = {}, onPosesUpdate }) {
                           max={100}
                           value={tol}
                           onChange={(e) => updatePoseTolerance(key, e.target.value)}
-                          className="w-20 border border-gray-300 rounded px-2 py-1 text-xs bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          disabled={disabled}
+                          className="w-20 border border-gray-300 rounded px-2 py-1 text-xs bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
                         />
                         <span className="text-[11px] text-gray-500">%</span>
 
                         <button
                           type="button"
-                          className="ml-auto text-[11px] text-blue-600 hover:text-blue-700"
+                          className="ml-auto text-[11px] text-blue-600 hover:text-blue-700 disabled:opacity-50"
                           onClick={() => {
                             setTestTargetKey(key);
                             setThresholdPct(getTargetTolerance(key));
                             setSelectedPoseKey(null);
                             setIsTestMode(true);
                           }}
+                          disabled={disabled}
                         >
                           Test this
                         </button>
