@@ -278,10 +278,14 @@ const draw = {
   face(poseData, ctx, { width, height }) {
     if (!poseData.faceLandmarks) return;
 
-    const oval = FACEMESH_FACE_OVAL.map(([idx]) => {
-      const p = poseData.faceLandmarks[idx];
-      return { x: p.x * width, y: p.y * height };
-    });
+    const oval = FACEMESH_FACE_OVAL
+      .map(([idx]) => {
+        const p = poseData.faceLandmarks?.[idx];
+        if (!p || p.x == null || p.y == null) return null;
+
+        return { x: p.x * width, y: p.y * height };
+      })
+      .filter(Boolean);
 
     // keep neutral for now (no segmentName)
     drawPath(ctx, oval, null, null);
@@ -290,9 +294,11 @@ const draw = {
     ctx.strokeStyle = "#60a5fa";
     ctx.lineWidth = 1;
 
-    for (const lm of poseData.faceLandmarks) {
-      const x = lm.x * width;
-      const y = lm.y * height;
+   for (const lm of poseData.faceLandmarks ?? []) {
+    if (!lm || lm.x == null || lm.y == null) continue;
+
+    const x = lm.x * width;
+    const y = lm.y * height;
       if (x <= width && y <= height) {
         ctx.beginPath();
         ctx.arc(x, y, CIRCLE_RADIUS, 0, 2 * Math.PI);
