@@ -40,8 +40,6 @@ async function sleep(ms) {
 /**
  * ✅ Prevent duplicate "startup" telemetry per playId even if GamePlayerInner remounts
  * (e.g., dev StrictMode mount/unmount/mount).
- *
- * Module scope survives remounts within the same tab session.
  */
 const __startupTelemetrySentForPlay = new Set();
 
@@ -170,7 +168,7 @@ export default function GamePlayerRoot({
 function GamePlayerInner({
   game,
   levelIndex,
-  deviceId,
+  deviceId, // kept for signature compat
   playId,
   onComplete,
   width,
@@ -227,7 +225,6 @@ function GamePlayerInner({
         const pose = poseDataRef.current;
         telemetryRef.current.recordPoseFrame({
           timestamp: Date.now(),
-          playId,
           nodeIndex: session.nodeIndex,
           stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
           poseData: {
@@ -250,7 +247,7 @@ function GamePlayerInner({
       return;
     }
 
-    // ✅ Only allow the startup trio once per playId (prevents "page reload" double fire)
+    // ✅ startup trio gating (only for those events)
     const startupAlreadySent = __startupTelemetrySentForPlay.has(playId);
     if (!startupAlreadySent) {
       __startupTelemetrySentForPlay.add(playId);
@@ -260,6 +257,7 @@ function GamePlayerInner({
       if (eff.type === "TELEMETRY_EVENT") {
         const evt = eff.event;
 
+        // Only suppress the startup-ish ones after the first time
         if (startupAlreadySent) {
           if (evt?.type === "SESSION_START" || evt?.type === "STATE_ENTER") {
             continue;
@@ -271,15 +269,19 @@ function GamePlayerInner({
       }
 
       if (eff.type === "POSE_RECORDING_HINT") {
-        if (startupAlreadySent) continue;
-
+        // ✅ CRITICAL FIX:
+        // Always toggle recording — do NOT skip this after startup.
         shouldRecordPoseRef.current = !!eff.enabled;
-        bus.emitEvent("POSE_RECORDING_HINT", {
-          playId,
-          enabled: !!eff.enabled,
-          stateType: eff.stateType,
-          nodeIndex: eff.nodeIndex,
-        });
+
+        // Optional: emit only once to avoid noise
+        if (!startupAlreadySent) {
+          bus.emitEvent("POSE_RECORDING_HINT", {
+            playId,
+            enabled: !!eff.enabled,
+            stateType: eff.stateType,
+            nodeIndex: eff.nodeIndex,
+          });
+        }
       }
 
       if (eff.type === "ON_COMPLETE") {
@@ -293,7 +295,7 @@ function GamePlayerInner({
     }
 
     dispatch(commands.consumeEffects());
-  }, [session.effects, session.levelId, session.gameId, onComplete, playId, dispatch]);
+  }, [session.effects, session.levelId, session.gameId, onComplete, playId]);
 
   const level = game.levels?.[levelIndex];
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
@@ -305,7 +307,7 @@ function GamePlayerInner({
   const rightPanelWidth = Math.max(260, Math.floor(width * 0.28));
   const leftPanelWidth = width - rightPanelWidth;
 
-  // Dialogue overlay (for intro/outro) — kept here in case your StateRenderer uses it
+  // Dialogue overlay (for intro/outro)
   const dialogueText = (() => {
     if (!isDialogueLike(type)) return "";
     const lines = session.node?.lines ?? session.node?.dialogues ?? [];
@@ -319,7 +321,7 @@ function GamePlayerInner({
     return sp?.name ?? sp ?? "";
   })();
 
-  // ✅ Similarity overlays only during POSE_MATCH
+  // Similarity overlays only during POSE_MATCH
   const rightSimilarityScores =
     type === STATE_TYPES.POSE_MATCH ? (session.poseMatch?.perSegment ?? []) : [];
 
@@ -355,7 +357,6 @@ function GamePlayerInner({
             poseDataRef={poseDataRef}
             width={leftPanelWidth}
             height={height}
-            // leaving these in case your renderer uses them (safe even if ignored)
             dialogueText={dialogueText}
             speaker={speaker}
           />
