@@ -96,7 +96,9 @@ function emitTelemetry(session, evt) {
 /* ----------------------------- public API ----------------------------- */
 
 export function createInitialSession({ game, initialLevel = 0, playId = null }) {
-  console.log("reducer game log:  ", game);
+  // eslint-disable-next-line no-console
+  console.log("reducer game log: ", game);
+
   let session = createSession({
     game,
     playId,
@@ -229,7 +231,6 @@ export function applyCommand(session, name, payload) {
         selectedValue: answer,
         selectedLabel: answer === true ? "True" : answer === false ? "False" : null,
 
-        // keep your existing fields too
         answer,
         question: next.intuition?.question,
       });
@@ -238,17 +239,6 @@ export function applyCommand(session, name, payload) {
     }
 
     /* ---------------------- Insight (option choice) ---------------------- */
-    /**
-     * Payload suggestions (use whatever you already have):
-     * {
-     *   optionIndex: number,
-     *   optionId: string,
-     *   optionText: string,
-     *   question: string,
-     *   prompt: string,
-     *   value: any
-     * }
-     */
     case "INSIGHT_OPTION_SELECTED": {
       const optionIndex = Number.isFinite(Number(payload?.optionIndex))
         ? Number(payload.optionIndex)
@@ -344,7 +334,7 @@ export function applyCommand(session, name, payload) {
 /* ----------------------------- node handling ----------------------------- */
 
 function currentNode(session) {
-  return session.levelStateNodes?.[session.nodeIndex] ?? null;
+  return session.nodes?.[session.nodeIndex] ?? null;
 }
 
 function cancelNodeTimers(session, nodeIndex) {
@@ -357,7 +347,8 @@ function cancelNodeTimers(session, nodeIndex) {
 }
 
 function enterNode(session, nodeIndex, { reason } = {}) {
-  const node = session.levelStateNodes?.[nodeIndex] ?? null;
+  const node = session.nodes?.[nodeIndex] ?? null;
+  // eslint-disable-next-line no-console
   console.log("POSE NODE", node?.type, node?.poseIds?.length, node?.poseTolerances);
 
   const t = nodeType(node);
@@ -374,7 +365,7 @@ function enterNode(session, nodeIndex, { reason } = {}) {
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
 
-  // ✅ IMPORTANT: initialize poseMatch using node poseIds + node.poseTolerances[0]
+  // initialize poseMatch using node poseIds + node.poseTolerances[0]
   if (t === STATE_TYPES.POSE_MATCH) {
     const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
     const initialStep = 0;
@@ -437,17 +428,15 @@ function exitNode(session, { reason } = {}) {
 function goNextNode(session, { reason } = {}) {
   const nextIndex = session.nodeIndex + 1;
 
-  if (nextIndex >= (session.levelStateNodes?.length ?? 0)) {
+  if (nextIndex >= (session.nodes?.length ?? 0)) {
     let done = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
 
-    // keep if you want (you can filter it out in the emitter)
     done = emitTelemetry(done, {
       type: "LEVEL_COMPLETE",
       at: done.time.now,
       levelId: done.levelId,
     });
 
-    // Add a session end marker here (safe + deterministic)
     done = emitTelemetry(done, {
       type: "SESSION_END",
       at: done.time.now,
@@ -531,8 +520,8 @@ function handleNext(session, payload) {
   }
 
   // POSE_MATCH:
-  // ✅ manual click ALWAYS advances
-  // ✅ auto only advances if matched
+  // manual click ALWAYS advances
+  // auto only advances if matched
   if (t === STATE_TYPES.POSE_MATCH) {
     const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
     const i = session.stepIndex ?? 0;
@@ -549,7 +538,6 @@ function handleNext(session, payload) {
       const nextStep = i + 1;
       const nextTargetPoseId = poseIds[nextStep] ?? null;
 
-      // ✅ IMPORTANT: update thresholdPct for the NEXT step from node.poseTolerances[nextStep]
       const nextThresholdPct = getPoseThresholdPctForStep(node, nextStep, 70);
 
       let s = {
@@ -562,7 +550,7 @@ function handleNext(session, payload) {
           perSegment: [],
           matched: false,
           targetPoseId: nextTargetPoseId,
-          thresholdPct: nextThresholdPct, // ✅ FIX
+          thresholdPct: nextThresholdPct,
           stepIndex: nextStep,
           updatedAt: session.time.now,
         },
