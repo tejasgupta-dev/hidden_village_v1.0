@@ -1,4 +1,3 @@
-// src/lib/gamePlayer/states/poseMatchView.jsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +32,41 @@ function nowMS() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
+/**
+ * IMPORTANT:
+ * I don't know the exact feature-id names your computePoseMatch uses.
+ * So we provide a conservative mapping and fall back to `null` (meaning "use all")
+ * if we can't confidently build a feature list.
+ *
+ * Update this map to match your engine's feature IDs.
+ */
+const FEATURES_BY_GROUP = {
+  face: [],
+  leftArm: [],
+  rightArm: [],
+  leftLeg: [],
+  rightLeg: [],
+  hands: [],
+};
+
+function buildFeatureAllowListFromInclude(include) {
+  if (!include || typeof include !== "object") return null;
+
+  const enabledGroups = Object.entries(include)
+    .filter(([, v]) => v === true)
+    .map(([k]) => k);
+
+  // If nothing enabled, we treat it as "use all" (safer than scoring 0 features)
+  if (enabledGroups.length === 0) return null;
+
+  const ids = enabledGroups.flatMap((g) => FEATURES_BY_GROUP[g] ?? []);
+  // If map isn't filled out yet, don't restrict features
+  if (!ids || ids.length === 0) return null;
+
+  // de-dupe
+  return Array.from(new Set(ids));
+}
+
 export default function PoseMatchView({
   session,
   node,
@@ -52,10 +86,7 @@ export default function PoseMatchView({
     return poses && typeof poses === "object" ? poses : null;
   }, [level]);
 
-  const poseIds = useMemo(
-    () => (Array.isArray(node?.poseIds) ? node.poseIds : []),
-    [node?.poseIds]
-  );
+  const poseIds = useMemo(() => (Array.isArray(node?.poseIds) ? node.poseIds : []), [node?.poseIds]);
 
   const stepIndex = session?.stepIndex ?? 0;
   const targetPoseId = poseIds[stepIndex] ?? null;
@@ -65,18 +96,9 @@ export default function PoseMatchView({
     return safeParsePose(poseMap[targetPoseId]);
   }, [poseMap, targetPoseId]);
 
-  /**
-   * tolerance priority (0..100):
-   * 1) node.poseTolerances[stepIndex]
-   * 2) level.poseTolerancePctById[targetPoseId]
-   * 3) node.defaultTolerance || node.threshold
-   * 4) pose json tolerance fields (LAST)
-   * 5) fallback 70
-   */
   const thresholdPct = useMemo(() => {
     const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
-    const fromArray =
-      arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
+    const fromArray = arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
     if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
       return clampPct(fromArray, 70);
     }
@@ -94,8 +116,7 @@ export default function PoseMatchView({
       return clampPct(nodeDefault, 70);
     }
 
-    const poseSpecific =
-      targetPose?.tolerancePct ?? targetPose?.tolerance ?? targetPose?.threshold;
+    const poseSpecific = targetPose?.tolerancePct ?? targetPose?.tolerance ?? targetPose?.threshold;
     if (poseSpecific !== undefined && poseSpecific !== null && poseSpecific !== "") {
       return clampPct(poseSpecific, 70);
     }
@@ -125,6 +146,12 @@ export default function PoseMatchView({
 
   /* ----------------------------- similarity compute ----------------------------- */
 
+  const includeMask = session?.settings?.include ?? null;
+  const featureAllowList = useMemo(
+    () => buildFeatureAllowListFromInclude(includeMask),
+    [includeMask]
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -148,19 +175,16 @@ export default function PoseMatchView({
         return;
       }
 
-      // NOTE: keep enrich so your downstream coordinate assumptions remain stable
       const enrichedLive = enrichLandmarks(live);
       const enrichedTarget = enrichLandmarks(targetPose);
 
-      // ✅ new engine: uses all available features across pose + hands on BOTH live+target
       const result = computePoseMatch({
         livePose: enrichedLive,
         targetPose: enrichedTarget,
         thresholdPct,
-        featureIds: null, // use everything available (you'll add settings later)
+        featureIds: featureAllowList, // null => use everything (current behavior)
       });
 
-      // ✅ bridge: compute segment scores for PoseDrawer coloring
       const perSegment = perFeatureToPerSegment(result.perFeature);
 
       dispatch({
@@ -169,7 +193,6 @@ export default function PoseMatchView({
         payload: {
           overall: result.overall,
           perSegment,
-          // keep optional debug for later settings UI
           perFeature: result.perFeature,
           thresholdPct: result.thresholdPct,
           targetPoseId,
@@ -182,7 +205,7 @@ export default function PoseMatchView({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex]);
+  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex, featureAllowList]);
 
   /* ----------------------------- reducer truth ----------------------------- */
 
@@ -190,10 +213,7 @@ export default function PoseMatchView({
   const matched = !!session.poseMatch?.matched;
   const effectiveThreshold = Number(session.poseMatch?.thresholdPct ?? thresholdPct);
 
-  // ✅ this is what drives the colors now
-  const drawerScores = Array.isArray(session.poseMatch?.perSegment)
-    ? session.poseMatch.perSegment
-    : [];
+  const drawerScores = Array.isArray(session.poseMatch?.perSegment) ? session.poseMatch.perSegment : [];
 
   /* ----------------------------- advancing ----------------------------- */
 
@@ -229,7 +249,6 @@ export default function PoseMatchView({
               poseData={targetPose}
               width={Math.min(520, Math.floor(width * 0.55))}
               height={Math.min(700, Math.floor(height * 0.85))}
-              // ✅ pass real scores so it can color segments
               similarityScores={drawerScores}
             />
           ) : (
@@ -261,11 +280,7 @@ export default function PoseMatchView({
 
               <div className="mt-3 text-sm text-white/80">
                 Similarity: <span className="font-mono">{overall.toFixed(1)}%</span>{" "}
-                {matched ? (
-                  <span className="text-green-300">(matched)</span>
-                ) : (
-                  <span className="text-yellow-300">(keep trying)</span>
-                )}
+                {matched ? <span className="text-green-300">(matched)</span> : <span className="text-yellow-300">(keep trying)</span>}
               </div>
 
               <div className="mt-2 text-xs text-white/50">
@@ -289,9 +304,7 @@ export default function PoseMatchView({
                     "rounded-3xl font-semibold text-xl",
                     "ring-2 ring-white/30",
                     "transition-all duration-150",
-                    holdDone
-                      ? "bg-white/25 text-white hover:bg-white/35"
-                      : "bg-white/5 text-white/40 cursor-not-allowed",
+                    holdDone ? "bg-white/25 text-white hover:bg-white/35" : "bg-white/5 text-white/40 cursor-not-allowed",
                   ].join(" ")}
                   title={!holdDone ? "Wait for the hold timer" : "Advance"}
                 >
@@ -299,9 +312,7 @@ export default function PoseMatchView({
                 </button>
               </div>
 
-              <div className="text-xs text-white/50">
-                {!holdDone ? "Please wait…" : "Click Next to advance anytime"}
-              </div>
+              <div className="text-xs text-white/50">{!holdDone ? "Please wait…" : "Click Next to advance anytime"}</div>
             </div>
           </div>
         </div>
