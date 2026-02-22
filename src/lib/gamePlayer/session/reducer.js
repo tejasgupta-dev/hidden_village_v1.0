@@ -227,10 +227,8 @@ export function applyCommand(session, name, payload) {
         at: next.time.now,
         nodeIndex: next.nodeIndex,
         stateType: nodeType(currentNode(next)),
-
         selectedValue: answer,
         selectedLabel: answer === true ? "True" : answer === false ? "False" : null,
-
         answer,
         question: next.intuition?.question,
       });
@@ -239,6 +237,7 @@ export function applyCommand(session, name, payload) {
     }
 
     /* ---------------------- Insight (option choice) ---------------------- */
+
     case "INSIGHT_OPTION_SELECTED": {
       const optionIndex = Number.isFinite(Number(payload?.optionIndex))
         ? Number(payload.optionIndex)
@@ -334,15 +333,25 @@ export function applyCommand(session, name, payload) {
 /* ----------------------------- node handling ----------------------------- */
 
 function currentNode(session) {
-  return session.nodes?.[session.nodeIndex] ?? null;
+  return session?.nodes?.[session?.nodeIndex] ?? null;
+}
+
+// NOTE: make cursor timer node-scoped so old timers can't fire after node changes
+function cursorTag(nodeIndex) {
+  return `cursorDelay:${nodeIndex}`;
 }
 
 function cancelNodeTimers(session, nodeIndex) {
   let s = session;
-  s = cancelTimersByTag(s, "cursorDelay");
+
+  // cancel cursor for THIS node
+  s = cancelTimersByTag(s, cursorTag(nodeIndex));
+
+  // cancel auto + tween timers for THIS node
   s = cancelTimersByTag(s, `auto:${nodeIndex}`);
   s = cancelTimersByTag(s, `tween:${nodeIndex}:replay`);
   s = cancelTimersByTag(s, `tween:${nodeIndex}:finish`);
+
   return s;
 }
 
@@ -353,14 +362,15 @@ function enterNode(session, nodeIndex, { reason } = {}) {
 
   const t = nodeType(node);
 
-  let next = {
-    ...session,
+  // IMPORTANT: cancel timers for the *node we're entering* (in case of re-enter)
+  let next = cancelNodeTimers(session, nodeIndex);
+
+  next = {
+    ...next,
     nodeIndex,
     node,
-    flags: { ...session.flags, showCursor: false },
+    flags: { ...next.flags, showCursor: false },
   };
-
-  next = cancelNodeTimers(next, nodeIndex);
 
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
@@ -384,6 +394,9 @@ function enterNode(session, nodeIndex, { reason } = {}) {
         updatedAt: next.time.now,
       },
     };
+  } else {
+    // ensure stale poseMatch doesn't bleed into other nodes
+    next = { ...next, poseMatch: null };
   }
 
   if (t === STATE_TYPES.TWEEN) next = { ...next, tweenPlayIndex: 0 };
@@ -406,6 +419,7 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     nodeIndex,
   });
 
+  // schedule AFTER cancels (prevents timer stacking)
   next = scheduleCursor(next);
   next = scheduleAutoAdvanceIfNeeded(next);
 
@@ -416,10 +430,13 @@ function exitNode(session, { reason } = {}) {
   const node = currentNode(session);
   const t = nodeType(node);
 
-  return emitTelemetry(session, {
+  // cancel timers for the node we're exiting
+  let s = cancelNodeTimers(session, session.nodeIndex);
+
+  return emitTelemetry(s, {
     type: "STATE_EXIT",
-    at: session.time.now,
-    nodeIndex: session.nodeIndex,
+    at: s.time.now,
+    nodeIndex: s.nodeIndex,
     stateType: t,
     reason: reason ?? "UNKNOWN",
   });
@@ -468,6 +485,7 @@ function handleNext(session, payload) {
     const nextDialogueIndex = (session.dialogueIndex ?? 0) + 1;
 
     if (Array.isArray(lines) && lines.length > 0) {
+      // cancel timers for current node BEFORE we reschedule
       let s = cancelNodeTimers(session, session.nodeIndex);
 
       if (nextDialogueIndex < lines.length) {
@@ -490,14 +508,13 @@ function handleNext(session, payload) {
         return s;
       }
 
-      let s2 = emitTelemetry(session, {
+      let s2 = emitTelemetry(s, {
         type: "DIALOGUE_END",
-        at: session.time.now,
-        nodeIndex: session.nodeIndex,
+        at: s.time.now,
+        nodeIndex: s.nodeIndex,
         stateType: t,
       });
 
-      s2 = cancelNodeTimers(s2, session.nodeIndex);
       return goNextNode(s2, { reason: "DIALOGUE_FINISHED" });
     }
 
@@ -540,19 +557,21 @@ function handleNext(session, payload) {
 
       const nextThresholdPct = getPoseThresholdPctForStep(node, nextStep, 70);
 
-      let s = {
-        ...session,
+      let s = cancelNodeTimers(session, session.nodeIndex);
+
+      s = {
+        ...s,
         stepIndex: nextStep,
-        flags: { ...session.flags, showCursor: false },
+        flags: { ...s.flags, showCursor: false },
         poseMatch: {
-          ...(session.poseMatch ?? {}),
+          ...(s.poseMatch ?? {}),
           overall: 0,
           perSegment: [],
           matched: false,
           targetPoseId: nextTargetPoseId,
           thresholdPct: nextThresholdPct,
           stepIndex: nextStep,
-          updatedAt: session.time.now,
+          updatedAt: s.time.now,
         },
       };
 
@@ -567,6 +586,7 @@ function handleNext(session, payload) {
       });
 
       s = scheduleCursor(s);
+      s = scheduleAutoAdvanceIfNeeded(s);
       return s;
     }
 
@@ -586,8 +606,8 @@ function applyTimer(session, timer) {
       const next = { ...session, flags: { ...session.flags, showCursor: true } };
       return emitTelemetry(next, {
         type: "CURSOR_SHOWN",
-        at: session.time.now,
-        nodeIndex: session.nodeIndex,
+        at: next.time.now,
+        nodeIndex: next.nodeIndex,
       });
     }
 
@@ -621,14 +641,16 @@ function scheduleCursor(session) {
   if (!node) return session;
 
   const delayMS = node?.cursorDelayMS ?? session.settings?.cursor?.delayMS ?? 0;
-  const next = cancelTimersByTag(session, "cursorDelay");
+
+  // cancel any previous cursor timer for THIS node, then schedule
+  let next = cancelTimersByTag(session, cursorTag(session.nodeIndex));
 
   if (!delayMS || delayMS <= 0) {
     return { ...next, flags: { ...next.flags, showCursor: true } };
   }
 
   return scheduleIn(next, {
-    tag: "cursorDelay",
+    tag: cursorTag(session.nodeIndex),
     kind: "SHOW_CURSOR",
     delayMS,
   });
@@ -643,6 +665,8 @@ function scheduleAutoAdvanceIfNeeded(session) {
   const t = nodeType(node);
 
   const tag = `auto:${session.nodeIndex}`;
+
+  // if already scheduled for this node, do nothing
   if ((session.timers ?? []).some((tm) => tm.tag === tag)) return session;
 
   const autoMS = node?.autoAdvanceMS ?? node?.durationMS ?? 0;
