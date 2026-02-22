@@ -5,19 +5,41 @@ import { requirePlayOwner } from "@/lib/firebase/requirePlayOwner";
 
 export const runtime = "nodejs";
 
-export async function POST(req, { params }) {
+async function getPlayId(contextOrParams) {
+  // Supports:
+  // - POST(req, { params })
+  // - POST(req, context) where context.params may be a promise
+  const paramsMaybe = contextOrParams?.params ?? contextOrParams;
+
+  const resolved =
+    paramsMaybe && typeof paramsMaybe.then === "function"
+      ? await paramsMaybe
+      : paramsMaybe;
+
+  if (!resolved || typeof resolved !== "object") return null;
+
+  const direct = resolved.id ?? resolved.playId;
+  if (typeof direct === "string" && direct.length) return direct;
+
+  const first = Object.values(resolved).find(
+    (v) => typeof v === "string" && v.length
+  );
+  return first ?? null;
+}
+
+export async function POST(req, context) {
   const { success, response, user } = await requireSession(req);
   if (!success) return response;
 
-  const { id } = await params;
-  if (!id) {
+  const playId = await getPlayId(context);
+  if (!playId) {
     return NextResponse.json(
       { success: false, message: "Missing play id" },
       { status: 400 }
     );
   }
 
-  const isOwner = await requirePlayOwner(id, user.uid);
+  const isOwner = await requirePlayOwner(playId, user.uid);
   if (!isOwner) {
     return NextResponse.json(
       { success: false, message: "Forbidden" },
@@ -26,33 +48,41 @@ export async function POST(req, { params }) {
   }
 
   const body = await req.json().catch(() => ({}));
+  const incoming = Array.isArray(body?.events)
+    ? body.events
+    : body && typeof body === "object"
+    ? [body] // legacy single event
+    : [];
 
-  // ✅ Accept batch shape: { events: [...] }
-  const events = Array.isArray(body.events) ? body.events : null;
-
-  if (events) {
-    const baseRef = db.ref(`plays/${id}/eventData`);
-    const updates = {};
-
-    for (const evt of events) {
-      const key = baseRef.push().key;
-      updates[`plays/${id}/eventData/${key}`] = {
-        ...evt,
-        createdAt: Date.now(),
-      };
-    }
-
-    await db.ref().update(updates);
-
-    return NextResponse.json({ success: true, count: events.length });
+  if (!incoming.length) {
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Expected { events: [...] } or single event object",
+      },
+      { status: 400 }
+    );
   }
 
-  // ✅ Or accept single event object (legacy)
-  const eventRef = db.ref(`plays/${id}/eventData`).push();
-  await eventRef.set({
-    ...body,
-    createdAt: Date.now(),
-  });
+  const serverNow = Date.now();
 
-  return NextResponse.json({ success: true, count: 1 });
+  // Multi-location update (fast) — ONLY eventData
+  const updates = {};
+
+  for (const evtRaw of incoming) {
+    const evt = evtRaw && typeof evtRaw === "object" ? evtRaw : {};
+
+    const eventPushKey = db.ref(`plays/${playId}/eventData`).push().key;
+    updates[`plays/${playId}/eventData/${eventPushKey}`] = {
+      ...evt,
+      createdAt: serverNow,
+    };
+  }
+
+  await db.ref().update(updates);
+
+  return NextResponse.json({
+    success: true,
+    count: incoming.length,
+  });
 }

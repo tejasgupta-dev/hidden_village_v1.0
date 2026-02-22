@@ -1,3 +1,4 @@
+// api/plays/[id]/frames
 import { NextResponse } from "next/server";
 import { db } from "@/lib/firebase/firebaseAdmin";
 import { requireSession } from "@/lib/firebase/requireSession";
@@ -15,6 +16,16 @@ function sanitizeKey(s) {
       .replace(/[^a-z0-9_-]/g, "_")
       .slice(0, 64) || "unknown"
   );
+}
+
+function levelKey(levelIndex) {
+  const n = Number(levelIndex);
+  return Number.isFinite(n) ? `l${Math.max(0, Math.trunc(n))}` : "l_unknown";
+}
+
+function repKey(repIndex) {
+  const n = Number(repIndex);
+  return Number.isFinite(n) ? `r${Math.max(0, Math.trunc(n))}` : "r0";
 }
 
 async function getPlayId(context) {
@@ -62,55 +73,64 @@ export async function POST(req, context) {
 
   const serverNow = Date.now();
 
-  // 1) Raw frame writes (single copy)
+  // 1) Raw frame writes (POSE only)
   const updates = {};
 
-  // 2) Per-state compact summaries (min/max/count) computed per POST
-  //    We'll merge these into persistent ranges via transactions.
-  //    Map: stateTypeKey -> { min, max, count }
-  const perState = new Map();
+  // 2) Aggregations for this POST: per (lKey, rKey, stateTypeKey)
+  // key: `${lKey}|${rKey}|${stateTypeKey}` -> { min, max, count, lKey, rKey, stateTypeKey }
+  const perLRS = new Map();
+
+  let wrote = 0;
 
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i] ?? {};
 
+    // ✅ Only process actual POSE frames
+    if (f.frameType !== "POSE") continue;
+
     const seqNum = Number(f.seq);
-    const seqKey = Number.isFinite(seqNum) ? String(seqNum) : `${serverNow}-${i}`;
+    if (!Number.isFinite(seqNum)) continue; // require numeric seq for clean ranges
+
+    const seqKey = String(seqNum);
 
     // Strip redundant fields from client
     const { playId: _redundantPlayId, createdAt: _clientCreatedAt, ...raw } = f;
 
     const stateTypeKey = sanitizeKey(raw.stateType);
+    const lKey = levelKey(raw.levelIndex);
+    const rKey = repKey(raw.repIndex);
 
     // Raw sequential storage
     updates[`plays/${playId}/poseFrames/${seqKey}`] = {
       ...raw,
-      // preserve numeric seq when available
-      seq: Number.isFinite(seqNum) ? seqNum : raw.seq,
+      seq: seqNum,
       createdAt: serverNow, // server write time
     };
+    wrote++;
 
-    // Compact per-state aggregation for this batch
-    if (Number.isFinite(seqNum)) {
-      const cur = perState.get(stateTypeKey) ?? {
-        min: seqNum,
-        max: seqNum,
-        count: 0,
-      };
-      cur.min = Math.min(cur.min, seqNum);
-      cur.max = Math.max(cur.max, seqNum);
-      cur.count += 1;
-      perState.set(stateTypeKey, cur);
-    }
+    // per (level, rep, stateType) range summary
+    const key = `${lKey}|${rKey}|${stateTypeKey}`;
+    const cur =
+      perLRS.get(key) ?? { min: seqNum, max: seqNum, count: 0, lKey, rKey, stateTypeKey };
+
+    cur.min = Math.min(cur.min, seqNum);
+    cur.max = Math.max(cur.max, seqNum);
+    cur.count += 1;
+
+    perLRS.set(key, cur);
   }
 
-  // Write frames first (fast multi-location update)
-  await db.ref().update(updates);
+  // Write frames first
+  if (wrote > 0) {
+    await db.ref().update(updates);
+  }
 
-  // Merge per-state batch ranges into persistent ranges using transactions (atomic + race-safe)
+  // Merge poseFrameRangesByState (no "byLevel/byRep/byState" words)
+  // plays/{playId}/poseFrameRangesByState/{lKey}/{rKey}/{stateTypeKey}
   const txs = [];
-  for (const [stateTypeKey, add] of perState.entries()) {
+  for (const add of perLRS.values()) {
     const rangeRef = db.ref(
-      `plays/${playId}/poseFrameRangesByState/${stateTypeKey}`
+      `plays/${playId}/poseFrameRangesByState/${add.lKey}/${add.rKey}/${add.stateTypeKey}`
     );
 
     txs.push(
@@ -119,10 +139,8 @@ export async function POST(req, context) {
         const curMax = cur?.maxSeq;
         const curCount = cur?.count ?? 0;
 
-        const nextMin =
-          typeof curMin === "number" ? Math.min(curMin, add.min) : add.min;
-        const nextMax =
-          typeof curMax === "number" ? Math.max(curMax, add.max) : add.max;
+        const nextMin = typeof curMin === "number" ? Math.min(curMin, add.min) : add.min;
+        const nextMax = typeof curMax === "number" ? Math.max(curMax, add.max) : add.max;
 
         return {
           minSeq: nextMin,
@@ -140,7 +158,7 @@ export async function POST(req, context) {
 
   return NextResponse.json({
     success: true,
-    wrote: frames.length,
-    updatedStates: perState.size,
+    wrote,
+    updatedRanges: perLRS.size,
   });
 }

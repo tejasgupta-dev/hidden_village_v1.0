@@ -39,7 +39,7 @@ export default function PoseMatchView({
   width = 800,
   height = 600,
 }) {
-  const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 5000));
+  const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 2000));
 
   const level = useMemo(
     () => session?.game?.levels?.[session?.levelIndex] ?? null,

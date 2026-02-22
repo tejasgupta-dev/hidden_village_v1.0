@@ -28,15 +28,15 @@ const DEFAULT_SETTINGS = {
     intro: true,
     intuition: true,
     tween: true,
-    poseMatch: true,
+    poseMatch: false,
     insight: true,
     outro: true,
   },
 
   // Repetitions
   reps: {
-    poseMatch: 3,
-    tween: 3,
+    poseMatch: 2,
+    tween: 2,
   },
 
   ui: {

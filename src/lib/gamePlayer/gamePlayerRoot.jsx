@@ -51,6 +51,9 @@ const __startupTelemetrySentForPlay = new Set();
 const TELEMETRY_ALLOWED = new Set([
   "SESSION_START",
   "SESSION_END",
+  "LEVEL_START",
+  "LEVEL_END",
+
   "STATE_ENTER",
   "STATE_EXIT",
 
@@ -58,6 +61,8 @@ const TELEMETRY_ALLOWED = new Set([
   "POSE_MATCH_CLICK_NEXT",
   "POSE_MATCH_AUTO_FINISH",
   "POSE_MATCH_CLICK_FINISH",
+  "POSE_MATCH_REP_FINISH_CLICK",
+  "POSE_MATCH_REP_FINISH_AUTO",
 
   "TRUE_FALSE_SELECTED",
   "INSIGHT_OPTION_SELECTED",
@@ -76,7 +81,48 @@ function enrichTelemetryEventWithSession(evt, session) {
     evt.stepIndex ?? (Number.isFinite(Number(session?.stepIndex)) ? session.stepIndex : null);
   const targetPoseId = evt.targetPoseId ?? session?.poseMatch?.targetPoseId ?? null;
 
-  return { ...evt, stepIndex, targetPoseId };
+  const repIndex =
+    evt.repIndex ??
+    (normalizeStateType(session?.node?.type ?? session?.node?.state ?? null) === STATE_TYPES.POSE_MATCH
+      ? Number(session?.poseMatchRoundIndex ?? 0) || 0
+      : 0);
+
+  const levelIndex = Number.isFinite(Number(evt.levelIndex))
+    ? evt.levelIndex
+    : Number.isFinite(Number(session?.levelIndex))
+    ? session.levelIndex
+    : null;
+
+  const levelId = evt.levelId ?? session?.levelId ?? null;
+
+  return { ...evt, stepIndex, targetPoseId, repIndex, levelIndex, levelId };
+}
+
+function buildPoseFrameContext(session) {
+  const stateType = normalizeStateType(session?.node?.type ?? session?.node?.state ?? null);
+  const nodeIndex = Number.isFinite(Number(session?.nodeIndex)) ? session.nodeIndex : null;
+
+  const levelIndex = Number.isFinite(Number(session?.levelIndex)) ? session.levelIndex : null;
+  const levelId = session?.levelId ?? null;
+
+  const repIndex =
+    stateType === STATE_TYPES.POSE_MATCH
+      ? Number.isFinite(Number(session?.poseMatchRoundIndex))
+        ? Math.max(0, Math.trunc(Number(session.poseMatchRoundIndex)))
+        : 0
+      : 0;
+
+  const stepIndex =
+    stateType === STATE_TYPES.POSE_MATCH
+      ? Number.isFinite(Number(session?.stepIndex))
+        ? Math.max(0, Math.trunc(Number(session.stepIndex)))
+        : null
+      : null;
+
+  const targetPoseId =
+    stateType === STATE_TYPES.POSE_MATCH ? session?.poseMatch?.targetPoseId ?? null : null;
+
+  return { stateType, nodeIndex, levelIndex, levelId, repIndex, stepIndex, targetPoseId };
 }
 
 export default function GamePlayerRoot({
@@ -88,7 +134,7 @@ export default function GamePlayerRoot({
   const { width, height } = useWindowSize(640, 480);
 
   const gameId = game?.id ?? null;
-  const levelId = game?.levels?.[levelIndex]?.id ?? null;
+  const initialLevelId = game?.levels?.[levelIndex]?.id ?? null;
 
   const [playId, setPlayId] = useState(null);
   const [creatingPlay, setCreatingPlay] = useState(false);
@@ -98,7 +144,7 @@ export default function GamePlayerRoot({
   const createdOnceRef = useRef(false);
 
   const createPlay = useCallback(async () => {
-    if (!gameId || !levelId) return;
+    if (!gameId || !initialLevelId) return;
 
     setCreatingPlay(true);
     setCreateError(null);
@@ -111,7 +157,7 @@ export default function GamePlayerRoot({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ gameId, levelId, deviceId }),
+          body: JSON.stringify({ gameId, levelId: initialLevelId, deviceId }),
         });
 
         if (res.ok) {
@@ -135,23 +181,23 @@ export default function GamePlayerRoot({
       setCreateError(e?.message ?? String(e));
       setCreatingPlay(false);
     }
-  }, [gameId, levelId, deviceId]);
+  }, [gameId, initialLevelId, deviceId]);
 
-  // Create play on mount (once), only after levelId exists
+  // Create play on mount (once), only after initialLevelId exists
   useEffect(() => {
-    if (!gameId || !levelId) return;
+    if (!gameId || !initialLevelId) return;
     if (playId) return;
 
     if (createdOnceRef.current) return;
     createdOnceRef.current = true;
 
     void createPlay();
-  }, [gameId, levelId, playId, createPlay]);
+  }, [gameId, initialLevelId, playId, createPlay]);
 
-  if (!gameId || !levelId) {
+  if (!gameId || !initialLevelId) {
     return (
       <div className="w-full h-screen bg-gray-950 text-white flex items-center justify-center">
-        Preparing level…
+        Preparing game…
       </div>
     );
   }
@@ -212,6 +258,9 @@ function GamePlayerInner({
   const poseDataRef = useRef(null);
   const shouldRecordPoseRef = useRef(false);
 
+  // Local seq so server can aggregate ranges by seq
+  const poseSeqRef = useRef(0);
+
   // Required hidden video element for getPoseData
   const videoRef = useRef(null);
 
@@ -220,7 +269,7 @@ function GamePlayerInner({
   const cameraRecorderRef = useRef(null);
   const startedCameraRef = useRef(false);
 
-  // To avoid emitting SESSION_END twice
+  // To avoid emitting ON_COMPLETE logic twice
   const sessionEndedRef = useRef(false);
 
   // Telemetry bus — guaranteed to use the real playId
@@ -279,13 +328,32 @@ function GamePlayerInner({
     onTick: ({ now, dt, elapsed }) => {
       dispatch(commands.tick({ now, dt, elapsed }));
 
-      if (shouldRecordPoseRef.current && telemetryRef.current && poseDataRef.current) {
-        const pose = poseDataRef.current;
+      const bus = telemetryRef.current;
+      const pose = poseDataRef.current;
 
-        telemetryRef.current.recordPoseFrame({
-          timestamp: Date.now(),
-          nodeIndex: session.nodeIndex,
-          stateType: normalizeStateType(session.node?.type ?? session.node?.state ?? null),
+      if (shouldRecordPoseRef.current && bus && pose) {
+        const ctx = buildPoseFrameContext(session);
+        const seq = poseSeqRef.current++;
+        const ts = Date.now();
+
+        bus.recordPoseFrame({
+          frameType: "POSE",
+          seq,
+          timestamp: ts,
+
+          // separation keys (frame stream)
+          gameId: game?.id ?? null,
+          playId,
+          levelId: ctx.levelId ?? null,
+          levelIndex: ctx.levelIndex ?? null,
+          repIndex: ctx.repIndex ?? 0,
+
+          nodeIndex: ctx.nodeIndex ?? null,
+          stateType: ctx.stateType ?? null,
+
+          stepIndex: ctx.stepIndex ?? null,
+          targetPoseId: ctx.targetPoseId ?? null,
+
           poseData: pose ?? null,
         });
       }
@@ -351,9 +419,12 @@ function GamePlayerInner({
     }
 
     dispatch(commands.consumeEffects());
-  }, [session.effects, onComplete, playId, sessionEndedRef]);
+  }, [session.effects, onComplete, playId, session]);
 
-  const level = game.levels?.[levelIndex];
+  // IMPORTANT: use session.levelIndex (because reducer now advances levels)
+  const activeLevelIndex = Number.isFinite(Number(session?.levelIndex)) ? session.levelIndex : levelIndex;
+  const level = game.levels?.[activeLevelIndex];
+
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
 
   // live pose for the drawer
