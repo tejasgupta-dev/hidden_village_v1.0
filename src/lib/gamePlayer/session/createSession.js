@@ -35,8 +35,8 @@ const DEFAULT_SETTINGS = {
 
   // Repetitions
   reps: {
-    poseMatch: 1,
-    tween: 1,
+    poseMatch: 3,
+    tween: 3,
   },
 
   ui: {

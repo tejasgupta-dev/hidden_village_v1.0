@@ -375,7 +375,6 @@ function enterNode(session, nodeIndex, { reason } = {}) {
   if (isDialogueLikeType(t)) next = { ...next, dialogueIndex: 0 };
   if (isSteppedPoseType(t)) next = { ...next, stepIndex: 0 };
 
-  // initialize poseMatch using node poseIds + node.poseTolerances[0]
   if (t === STATE_TYPES.POSE_MATCH) {
     const poseIds = Array.isArray(node?.poseIds) ? node.poseIds : [];
     const initialStep = 0;
@@ -384,6 +383,8 @@ function enterNode(session, nodeIndex, { reason } = {}) {
 
     next = {
       ...next,
+      // ✅ NEW: reset reps/round index when entering pose match node
+      poseMatchRoundIndex: 0,
       poseMatch: {
         overall: 0,
         perSegment: [],
@@ -396,7 +397,7 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     };
   } else {
     // ensure stale poseMatch doesn't bleed into other nodes
-    next = { ...next, poseMatch: null };
+    next = { ...next, poseMatch: null, poseMatchRoundIndex: 0 };
   }
 
   if (t === STATE_TYPES.TWEEN) next = { ...next, tweenPlayIndex: 0 };
@@ -546,22 +547,23 @@ function handleNext(session, payload) {
     if (poseIds.length <= 0) return goNextNode(session, { reason: "POSE_MATCH_EMPTY" });
 
     const matched = !!session.poseMatch?.matched;
+    if (!isManualClick && !matched) return session;
 
-    if (!isManualClick && !matched) {
-      return session;
-    }
+    // ✅ NEW: reps support
+    const repsRaw = session?.settings?.reps?.poseMatch ?? 1;
+    const reps = Number.isFinite(Number(repsRaw)) ? Math.max(1, Math.trunc(Number(repsRaw))) : 1;
+    const round = Number.isFinite(Number(session?.poseMatchRoundIndex))
+      ? Math.max(0, Math.trunc(Number(session.poseMatchRoundIndex)))
+      : 0;
 
-    if (i + 1 < poseIds.length) {
-      const nextStep = i + 1;
+    const advanceToStep = (s, nextStep, nextRound) => {
       const nextTargetPoseId = poseIds[nextStep] ?? null;
-
       const nextThresholdPct = getPoseThresholdPctForStep(node, nextStep, 70);
 
-      let s = cancelNodeTimers(session, session.nodeIndex);
-
-      s = {
+      let out = {
         ...s,
         stepIndex: nextStep,
+        poseMatchRoundIndex: nextRound,
         flags: { ...s.flags, showCursor: false },
         poseMatch: {
           ...(s.poseMatch ?? {}),
@@ -575,21 +577,46 @@ function handleNext(session, payload) {
         },
       };
 
-      s = emitTelemetry(s, {
+      out = emitTelemetry(out, {
         type: isManualClick ? "POSE_MATCH_CLICK_NEXT" : "POSE_MATCH_AUTO_NEXT",
+        at: out.time.now,
+        nodeIndex: out.nodeIndex,
+        stateType: t,
+        stepIndex: nextStep,
+        targetPoseId: nextTargetPoseId,
+        thresholdPct: nextThresholdPct,
+        playIndex: nextRound, // helps eventId uniqueness across reps
+      });
+
+      out = scheduleCursor(out);
+      out = scheduleAutoAdvanceIfNeeded(out);
+      return out;
+    };
+
+    // next pose in current round
+    if (i + 1 < poseIds.length) {
+      let s = cancelNodeTimers(session, session.nodeIndex);
+      return advanceToStep(s, i + 1, round);
+    }
+
+    // finished last pose in sequence
+    // if more rounds remain, loop back to step 0
+    if (round + 1 < reps) {
+      let s = cancelNodeTimers(session, session.nodeIndex);
+
+      s = emitTelemetry(s, {
+        type: isManualClick ? "POSE_MATCH_REP_FINISH_CLICK" : "POSE_MATCH_REP_FINISH_AUTO",
         at: s.time.now,
         nodeIndex: s.nodeIndex,
         stateType: t,
-        stepIndex: s.stepIndex,
-        targetPoseId: nextTargetPoseId,
-        thresholdPct: nextThresholdPct,
+        stepIndex: i,
+        playIndex: round,
       });
 
-      s = scheduleCursor(s);
-      s = scheduleAutoAdvanceIfNeeded(s);
-      return s;
+      return advanceToStep(s, 0, round + 1);
     }
 
+    // finished final round
     return goNextNode(session, {
       reason: isManualClick ? "POSE_MATCH_CLICK_FINISH" : "POSE_MATCH_AUTO_FINISH",
     });

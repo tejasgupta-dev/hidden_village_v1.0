@@ -2,6 +2,8 @@
 // Angle-based pose similarity engine.
 // Works with poseLandmarks, leftHandLandmarks, rightHandLandmarks, faceLandmarks.
 
+import { enrichLandmarks } from "@/lib/pose/landmark";
+
 const DEG = 180 / Math.PI;
 
 /* ----------------------------- basic utils ----------------------------- */
@@ -71,17 +73,7 @@ export function createABCFeature({ id, label, dataKey, A, B, C, weight = 1, maxD
   return { id, label: label ?? id, type: "ABC", dataKey, points: [A, B, C], weight, maxDiffDeg };
 }
 
-export function createLineLineFeature({
-  id,
-  label,
-  dataKey,
-  A,
-  B,
-  C,
-  D,
-  weight = 1,
-  maxDiffDeg = 45,
-}) {
+export function createLineLineFeature({ id, label, dataKey, A, B, C, D, weight = 1, maxDiffDeg = 45 }) {
   return { id, label: label ?? id, type: "LINE_LINE", dataKey, points: [A, B, C, D], weight, maxDiffDeg };
 }
 
@@ -162,10 +154,9 @@ function addHandFingerFeatures(R, side /* "LH"|"RH" */, dataKey) {
 }
 
 function addFaceMeshFeatures(R) {
-  // MediaPipe FaceMesh common, stable indices:
-  // 1 nose tip, 33 left eye outer corner, 263 right eye outer corner,
-  // 61 left mouth corner, 291 right mouth corner, 152 chin, 10 forehead-ish
-  // (These are widely-used FaceMesh indices.)
+  // Common FaceMesh indices:
+  // 1 nose tip, 33 left eye outer, 263 right eye outer,
+  // 61 left mouth, 291 right mouth, 152 chin, 10 forehead-ish
   const dataKey = "faceLandmarks";
 
   R.FACE_EYES_NOSE = createABCFeature({
@@ -328,7 +319,7 @@ export const FEATURE_REGISTRY = (() => {
     maxDiffDeg: 35,
   });
 
-  // ✅ FaceMesh features
+  // FaceMesh features
   addFaceMeshFeatures(R);
 
   // Hands
@@ -337,6 +328,48 @@ export const FEATURE_REGISTRY = (() => {
 
   return R;
 })();
+
+/* ------------------------- include -> allowlist ------------------------- */
+/**
+ * include shape: { face,leftArm,rightArm,leftLeg,rightLeg,hands } booleans
+ * semantics:
+ * - include missing/null => null (use ALL)
+ * - all false            => [] (use NONE)
+ * - some true            => allowlist ids
+ */
+export function buildFeatureAllowListFromInclude(include, registry = FEATURE_REGISTRY) {
+  if (!include || typeof include !== "object") return null;
+
+  const enabled = Object.entries(include)
+    .filter(([, v]) => v === true)
+    .map(([k]) => k);
+
+  if (enabled.length === 0) return [];
+
+  const out = new Set();
+
+  // stable groups (explicit)
+  const addMany = (ids) => ids.forEach((id) => registry[id] && out.add(id));
+
+  if (enabled.includes("face")) {
+    for (const id of Object.keys(registry)) {
+      if (id.startsWith("FACE_")) out.add(id);
+    }
+  }
+
+  if (enabled.includes("hands")) {
+    for (const id of Object.keys(registry)) {
+      if (id.startsWith("LH_") || id.startsWith("RH_")) out.add(id);
+    }
+  }
+
+  if (enabled.includes("leftArm")) addMany(["POSE_LEFT_ELBOW", "POSE_LEFT_SHOULDER", "POSE_LEFT_ARM_BEND"]);
+  if (enabled.includes("rightArm")) addMany(["POSE_RIGHT_ELBOW", "POSE_RIGHT_SHOULDER", "POSE_RIGHT_ARM_BEND"]);
+  if (enabled.includes("leftLeg")) addMany(["POSE_LEFT_HIP", "POSE_LEFT_KNEE"]);
+  if (enabled.includes("rightLeg")) addMany(["POSE_RIGHT_HIP", "POSE_RIGHT_KNEE"]);
+
+  return Array.from(out);
+}
 
 /* ------------------------- feature selection logic ------------------------- */
 
@@ -363,7 +396,7 @@ export function chooseFeatures({
 } = {}) {
   let feats = [];
 
-  // ✅ IMPORTANT semantics:
+  // semantics:
   // - featureIds === null  => use ALL
   // - featureIds === []    => use NONE
   // - featureIds === [...] => use that allowlist
@@ -438,8 +471,7 @@ export function computePoseMatch({
 
   const features = chooseFeatures({ featureIds, registry, livePose, targetPose, allowDataKeys });
 
-  // ✅ If user selected NOTHING (all off), we define similarity = 100
-  // because there is literally nothing to compare.
+  // all-off => similarity 100 (nothing to compare)
   if (!features.length) {
     const noneSelected = Array.isArray(featureIds) && featureIds.length === 0;
 
@@ -499,10 +531,7 @@ export function computePoseMatch({
     thresholdPct: th,
     perFeature,
     usedFeatureIds: perFeature.map((p) => p.id),
-    debug: {
-      featuresCount: perFeature.length,
-      allowDataKeys: allowDataKeys ?? null,
-    },
+    debug: { featuresCount: perFeature.length, allowDataKeys: allowDataKeys ?? null },
   };
 }
 
@@ -512,21 +541,18 @@ export function perFeatureToPerSegment(perFeature = []) {
   const rows = Array.isArray(perFeature) ? perFeature : [];
 
   const featureIdToSegment = (id) => {
-    // Arms
     if (id === "POSE_RIGHT_SHOULDER") return "RIGHT_BICEP";
     if (id === "POSE_LEFT_SHOULDER") return "LEFT_BICEP";
 
     if (id === "POSE_RIGHT_ELBOW" || id === "POSE_RIGHT_ARM_BEND") return "RIGHT_FOREARM";
     if (id === "POSE_LEFT_ELBOW" || id === "POSE_LEFT_ARM_BEND") return "LEFT_FOREARM";
 
-    // Legs
     if (id === "POSE_RIGHT_HIP") return "RIGHT_THIGH";
     if (id === "POSE_LEFT_HIP") return "LEFT_THIGH";
 
     if (id === "POSE_RIGHT_KNEE") return "RIGHT_SHIN";
     if (id === "POSE_LEFT_KNEE") return "LEFT_SHIN";
 
-    // Hands
     if (id.startsWith("RH_") || id.startsWith("LH_")) {
       const side = id.startsWith("RH_") ? "RIGHT" : "LEFT";
       const rest = id.slice(3);
@@ -542,7 +568,7 @@ export function perFeatureToPerSegment(perFeature = []) {
       return `${side}_${finger}_${joint}`;
     }
 
-    // Face features don't map to PoseDrawer segments (yet)
+    // Face doesn't map to PoseDrawer segments (yet)
     return null;
   };
 
@@ -568,6 +594,85 @@ export function perFeatureToPerSegment(perFeature = []) {
   }
 
   return out;
+}
+
+/* ---------------------- FaceMesh gating + one-call frame eval ---------------------- */
+
+function hasFaceLandmarks(poseObj) {
+  const arr = poseObj?.faceLandmarks;
+  return Array.isArray(arr) && arr.length > 0;
+}
+
+/**
+ * Single-frame evaluation that PoseMatchView can call.
+ * PoseMatchView stays UI-only.
+ */
+export function computePoseMatchFrame({
+  liveRaw,
+  targetRaw,
+  include = null,
+  thresholdPct = 70,
+  registry = FEATURE_REGISTRY,
+  allowDataKeys = null,
+  weightsOverride = null,
+} = {}) {
+  const th = clampPct(thresholdPct, 70);
+
+  if (!liveRaw || !targetRaw) {
+    return {
+      blocked: false,
+      blockReason: null,
+      overall: 0,
+      matched: false,
+      thresholdPct: th,
+      perFeature: [],
+      perSegment: [],
+      debug: { reason: "missing_pose" },
+    };
+  }
+
+  // Face required => block if missing (live OR target)
+  const faceRequired = !!include?.face;
+  if (faceRequired) {
+    const liveHas = hasFaceLandmarks(liveRaw);
+    const targetHas = hasFaceLandmarks(targetRaw);
+    if (!liveHas || !targetHas) {
+      return {
+        blocked: true,
+        blockReason: "face_missing",
+        overall: 0,
+        matched: false,
+        thresholdPct: th,
+        perFeature: [],
+        perSegment: [],
+        debug: { reason: "face_missing", liveHasFace: liveHas, targetHasFace: targetHas },
+      };
+    }
+  }
+
+  const featureIds = buildFeatureAllowListFromInclude(include, registry);
+
+  const live = enrichLandmarks(liveRaw);
+  const target = enrichLandmarks(targetRaw);
+
+  const result = computePoseMatch({
+    livePose: live,
+    targetPose: target,
+    featureIds,
+    registry,
+    allowDataKeys,
+    thresholdPct: th,
+    weightsOverride,
+  });
+
+  const perSegment = perFeatureToPerSegment(result.perFeature);
+
+  return {
+    blocked: false,
+    blockReason: null,
+    ...result,
+    perSegment,
+  };
 }
 
 /* ---------------------- helpers for settings UI ---------------------- */
