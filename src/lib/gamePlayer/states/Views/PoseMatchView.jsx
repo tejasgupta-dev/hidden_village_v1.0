@@ -1,3 +1,4 @@
+// src/lib/gamePlayer/states/poseMatchView.jsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,53 +34,89 @@ function nowMS() {
 }
 
 /**
- * IMPORTANT:
- * I don't know the exact feature-id names your computePoseMatch uses.
- * So we provide a conservative mapping and fall back to `null` (meaning "use all")
- * if we can't confidently build a feature list.
- *
- * Update this map to match your engine's feature IDs.
+ * Feature IDs come directly from FEATURE_REGISTRY in poseMatching.js
  */
 const FEATURES_BY_GROUP = {
-  face: [],
-  leftArm: [],
-  rightArm: [],
-  leftLeg: [],
-  rightLeg: [],
-  hands: [],
+  face: [
+    "FACE_EYES_NOSE",
+    "FACE_MOUTH_NOSE",
+    "FACE_MOUTH_CHIN",
+    "FACE_NOSE_CHIN_FOREHEAD",
+    "FACE_EYE_LINE_TO_MOUTH_LINE",
+  ],
+
+  leftArm: ["POSE_LEFT_ELBOW", "POSE_LEFT_SHOULDER", "POSE_LEFT_ARM_BEND"],
+  rightArm: ["POSE_RIGHT_ELBOW", "POSE_RIGHT_SHOULDER", "POSE_RIGHT_ARM_BEND"],
+  leftLeg: ["POSE_LEFT_HIP", "POSE_LEFT_KNEE"],
+  rightLeg: ["POSE_RIGHT_HIP", "POSE_RIGHT_KNEE"],
+
+  hands: [
+    // LH_
+    "LH_THUMB_CMC",
+    "LH_THUMB_MCP",
+    "LH_THUMB_IP",
+    "LH_INDEX_MCP",
+    "LH_INDEX_PIP",
+    "LH_INDEX_DIP",
+    "LH_MIDDLE_MCP",
+    "LH_MIDDLE_PIP",
+    "LH_MIDDLE_DIP",
+    "LH_RING_MCP",
+    "LH_RING_PIP",
+    "LH_RING_DIP",
+    "LH_PINKY_MCP",
+    "LH_PINKY_PIP",
+    "LH_PINKY_DIP",
+    "LH_INDEX_MIDDLE_SPREAD",
+    "LH_MIDDLE_RING_SPREAD",
+    "LH_RING_PINKY_SPREAD",
+
+    // RH_
+    "RH_THUMB_CMC",
+    "RH_THUMB_MCP",
+    "RH_THUMB_IP",
+    "RH_INDEX_MCP",
+    "RH_INDEX_PIP",
+    "RH_INDEX_DIP",
+    "RH_MIDDLE_MCP",
+    "RH_MIDDLE_PIP",
+    "RH_MIDDLE_DIP",
+    "RH_RING_MCP",
+    "RH_RING_PIP",
+    "RH_RING_DIP",
+    "RH_PINKY_MCP",
+    "RH_PINKY_PIP",
+    "RH_PINKY_DIP",
+    "RH_INDEX_MIDDLE_SPREAD",
+    "RH_MIDDLE_RING_SPREAD",
+    "RH_RING_PINKY_SPREAD",
+  ],
 };
 
 function buildFeatureAllowListFromInclude(include) {
-  if (!include || typeof include !== "object") return null;
+  // include shape: { face,leftArm,rightArm,leftLeg,rightLeg,hands } booleans
+  if (!include || typeof include !== "object") return null; // null => use all
 
   const enabledGroups = Object.entries(include)
     .filter(([, v]) => v === true)
     .map(([k]) => k);
 
-  // If nothing enabled, we treat it as "use all" (safer than scoring 0 features)
-  if (enabledGroups.length === 0) return null;
+  // ✅ all off => NO features selected => computePoseMatch returns overall 100
+  if (enabledGroups.length === 0) return [];
 
   const ids = enabledGroups.flatMap((g) => FEATURES_BY_GROUP[g] ?? []);
-  // If map isn't filled out yet, don't restrict features
-  if (!ids || ids.length === 0) return null;
-
-  // de-dupe
   return Array.from(new Set(ids));
 }
 
-export default function PoseMatchView({
-  session,
-  node,
-  dispatch,
-  poseDataRef,
-  width = 800,
-  height = 600,
-}) {
+function hasFaceLandmarks(poseObj) {
+  const arr = poseObj?.faceLandmarks;
+  return Array.isArray(arr) && arr.length > 0;
+}
+
+export default function PoseMatchView({ session, node, dispatch, poseDataRef, width = 800, height = 600 }) {
   const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 5000));
 
-  const level = useMemo(() => {
-    return session?.game?.levels?.[session?.levelIndex] ?? null;
-  }, [session?.game, session?.levelIndex]);
+  const level = useMemo(() => session?.game?.levels?.[session?.levelIndex] ?? null, [session?.game, session?.levelIndex]);
 
   const poseMap = useMemo(() => {
     const poses = level?.poses ?? null;
@@ -99,27 +136,19 @@ export default function PoseMatchView({
   const thresholdPct = useMemo(() => {
     const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
     const fromArray = arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
-    if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
-      return clampPct(fromArray, 70);
-    }
+    if (fromArray !== undefined && fromArray !== null && fromArray !== "") return clampPct(fromArray, 70);
 
     const map = level?.poseTolerancePctById;
     if (map && typeof map === "object" && targetPoseId) {
       const fromMap = map[targetPoseId];
-      if (fromMap !== undefined && fromMap !== null && fromMap !== "") {
-        return clampPct(fromMap, 70);
-      }
+      if (fromMap !== undefined && fromMap !== null && fromMap !== "") return clampPct(fromMap, 70);
     }
 
     const nodeDefault = node?.defaultTolerance ?? node?.threshold;
-    if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") {
-      return clampPct(nodeDefault, 70);
-    }
+    if (nodeDefault !== undefined && nodeDefault !== null && nodeDefault !== "") return clampPct(nodeDefault, 70);
 
     const poseSpecific = targetPose?.tolerancePct ?? targetPose?.tolerance ?? targetPose?.threshold;
-    if (poseSpecific !== undefined && poseSpecific !== null && poseSpecific !== "") {
-      return clampPct(poseSpecific, 70);
-    }
+    if (poseSpecific !== undefined && poseSpecific !== null && poseSpecific !== "") return clampPct(poseSpecific, 70);
 
     return 70;
   }, [node, stepIndex, level, targetPoseId, targetPose]);
@@ -135,22 +164,32 @@ export default function PoseMatchView({
   }, [session.nodeIndex, stepIndex, targetPoseId]);
 
   useEffect(() => {
-    const t = setInterval(() => {
-      setHoldElapsed(nowMS() - stepStartRef.current);
-    }, 100);
+    const t = setInterval(() => setHoldElapsed(nowMS() - stepStartRef.current), 100);
     return () => clearInterval(t);
   }, []);
 
   const holdRemaining = Math.max(0, minHoldMS - holdElapsed);
   const holdDone = holdElapsed >= minHoldMS;
 
-  /* ----------------------------- similarity compute ----------------------------- */
+  /* ----------------------------- include -> feature allowlist ----------------------------- */
 
   const includeMask = session?.settings?.include ?? null;
-  const featureAllowList = useMemo(
-    () => buildFeatureAllowListFromInclude(includeMask),
-    [includeMask]
-  );
+  const featureAllowList = useMemo(() => buildFeatureAllowListFromInclude(includeMask), [includeMask]);
+
+  const faceEnabled = includeMask?.face === true;
+
+  /* ----------------------------- face missing gate (pause) ----------------------------- */
+
+  const pausedForFaceRef = useRef(false);
+  const [faceMissing, setFaceMissing] = useState(false);
+
+  useEffect(() => {
+    // re-evaluate per step
+    pausedForFaceRef.current = false;
+    setFaceMissing(false);
+  }, [session.nodeIndex, stepIndex, targetPoseId]);
+
+  /* ----------------------------- similarity compute ----------------------------- */
 
   useEffect(() => {
     let cancelled = false;
@@ -164,16 +203,38 @@ export default function PoseMatchView({
         dispatch({
           type: "COMMAND",
           name: "POSE_MATCH_SCORES",
-          payload: {
-            overall: 0,
-            perSegment: [],
-            thresholdPct,
-            targetPoseId,
-            stepIndex,
-          },
+          payload: { overall: 0, perSegment: [], thresholdPct, targetPoseId, stepIndex },
         });
         return;
       }
+
+      // ✅ You requested: FaceMesh only for face.
+      // If face is enabled but missing on either live or target, pause.
+      if (faceEnabled) {
+        const liveHasFace = hasFaceLandmarks(live);
+        const targetHasFace = hasFaceLandmarks(targetPose);
+
+        if (!liveHasFace || !targetHasFace) {
+          setFaceMissing(true);
+
+          // pause once
+          if (!pausedForFaceRef.current) {
+            pausedForFaceRef.current = true;
+            dispatch(commands.pause());
+          }
+
+          // keep scores at 0 while blocked
+          dispatch({
+            type: "COMMAND",
+            name: "POSE_MATCH_SCORES",
+            payload: { overall: 0, perSegment: [], thresholdPct, targetPoseId, stepIndex },
+          });
+
+          return;
+        }
+      }
+
+      setFaceMissing(false);
 
       const enrichedLive = enrichLandmarks(live);
       const enrichedTarget = enrichLandmarks(targetPose);
@@ -182,7 +243,7 @@ export default function PoseMatchView({
         livePose: enrichedLive,
         targetPose: enrichedTarget,
         thresholdPct,
-        featureIds: featureAllowList, // null => use everything (current behavior)
+        featureIds: featureAllowList, // null => all, [] => none (overall 100), allowlist => filtered
       });
 
       const perSegment = perFeatureToPerSegment(result.perFeature);
@@ -205,7 +266,7 @@ export default function PoseMatchView({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex, featureAllowList]);
+  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex, featureAllowList, faceEnabled]);
 
   /* ----------------------------- reducer truth ----------------------------- */
 
@@ -223,6 +284,7 @@ export default function PoseMatchView({
   }, [session.nodeIndex, stepIndex, targetPoseId]);
 
   useEffect(() => {
+    if (faceMissing) return; // blocked
     if (!targetPoseId) return;
     if (!holdDone) return;
     if (!matched) return;
@@ -231,9 +293,10 @@ export default function PoseMatchView({
     didAutoAdvanceRef.current = true;
 
     dispatch(commands.next({ source: "auto" }));
-  }, [targetPoseId, holdDone, matched, dispatch]);
+  }, [faceMissing, targetPoseId, holdDone, matched, dispatch]);
 
   const onNext = () => {
+    if (faceMissing) return; // blocked
     if (!holdDone) return;
     dispatch(commands.next({ source: "click" }));
   };
@@ -266,16 +329,13 @@ export default function PoseMatchView({
             </div>
 
             <div className="flex-1 min-w-0">
-              <div
-                className="text-white/95 leading-relaxed"
-                style={{ fontSize: session.settings?.ui?.dialogueFontSize ?? 22 }}
-              >
+              <div className="text-white/95 leading-relaxed" style={{ fontSize: session.settings?.ui?.dialogueFontSize ?? 22 }}>
                 {targetPoseId ? "Match the target pose." : "No pose targets found."}
               </div>
 
               <div className="mt-3 text-sm text-white/50">
-                Target: {targetPoseId ?? "—"} | Step {Math.min(stepIndex + 1, poseIds.length)} /{" "}
-                {poseIds.length} | Tolerance: {effectiveThreshold.toFixed(0)}%
+                Target: {targetPoseId ?? "—"} | Step {Math.min(stepIndex + 1, poseIds.length)} / {poseIds.length} | Tolerance:{" "}
+                {effectiveThreshold.toFixed(0)}%
               </div>
 
               <div className="mt-3 text-sm text-white/80">
@@ -283,20 +343,26 @@ export default function PoseMatchView({
                 {matched ? <span className="text-green-300">(matched)</span> : <span className="text-yellow-300">(keep trying)</span>}
               </div>
 
-              <div className="mt-2 text-xs text-white/50">
-                {!holdDone
-                  ? `Please wait: ${Math.ceil(holdRemaining / 1000)}s`
-                  : matched
-                  ? "Matched — will auto-advance."
-                  : "You can match it or click Next to move on."}
-              </div>
+              {faceMissing ? (
+                <div className="mt-2 text-xs text-red-200">
+                  Face matching is enabled, but FaceMesh landmarks are missing (live or target). Game is paused.
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-white/50">
+                  {!holdDone
+                    ? `Please wait: ${Math.ceil(holdRemaining / 1000)}s`
+                    : matched
+                    ? "Matched — will auto-advance."
+                    : "You can match it or click Next to move on."}
+                </div>
+              )}
             </div>
 
             <div className="shrink-0 flex flex-col items-end gap-4">
               <div className="p-4">
                 <button
                   type="button"
-                  disabled={!holdDone}
+                  disabled={!holdDone || faceMissing}
                   onClick={onNext}
                   className={[
                     "next-button",
@@ -304,15 +370,19 @@ export default function PoseMatchView({
                     "rounded-3xl font-semibold text-xl",
                     "ring-2 ring-white/30",
                     "transition-all duration-150",
-                    holdDone ? "bg-white/25 text-white hover:bg-white/35" : "bg-white/5 text-white/40 cursor-not-allowed",
+                    holdDone && !faceMissing
+                      ? "bg-white/25 text-white hover:bg-white/35"
+                      : "bg-white/5 text-white/40 cursor-not-allowed",
                   ].join(" ")}
-                  title={!holdDone ? "Wait for the hold timer" : "Advance"}
+                  title={faceMissing ? "FaceMesh missing" : !holdDone ? "Wait for the hold timer" : "Advance"}
                 >
                   Next →
                 </button>
               </div>
 
-              <div className="text-xs text-white/50">{!holdDone ? "Please wait…" : "Click Next to advance anytime"}</div>
+              <div className="text-xs text-white/50">
+                {faceMissing ? "FaceMesh required." : !holdDone ? "Please wait…" : "Click Next to advance anytime"}
+              </div>
             </div>
           </div>
         </div>
