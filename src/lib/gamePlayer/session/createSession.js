@@ -11,14 +11,34 @@ const DEFAULT_FLAGS = {
 };
 
 const DEFAULT_SETTINGS = {
-  cursor: {
-    sensitivity: 1.5,
-    delayMS: 600,
+  logFPS: 15,
+
+  // Which body-part groups to include in similarity
+  include: {
+    face: false,
+    leftArm: true,
+    rightArm: true,
+    leftLeg: true,
+    rightLeg: true,
+    hands: false,
   },
-  pose: {
-    enabled: true,
-    logFPS: 15,
+
+  // Which state types should exist/render in this level
+  states: {
+    intro: true,
+    intuition: true,
+    tween: true,
+    poseMatch: true,
+    insight: true,
+    outro: true,
   },
+
+  // Repetitions
+  reps: {
+    poseMatch: 1,
+    tween: 1,
+  },
+
   ui: {
     dialogueFontSize: 20,
   },
@@ -35,66 +55,64 @@ export function createSession({
   }
 
   const levels = Array.isArray(game.levels) ? game.levels : [];
-  console.log("createsession levels:  ", levels)
+  console.log("createsession levels:", levels);
 
   const levelIndex =
-    typeof initialLevel === "number" && initialLevel >= 0 ? initialLevel : 0;
+    typeof initialLevel === "number" && initialLevel >= 0
+      ? initialLevel
+      : 0;
 
   const levelObj = levels[levelIndex] ?? null;
   if (!levelObj) {
     throw new Error(`createSession: level not found at index ${levelIndex}`);
   }
 
-  // ✅ RTDB: levels are plain objects
-  const settings = mergeSettings(DEFAULT_SETTINGS, levelObj?.settings ?? {});
+  const settings = mergeSettings(
+    DEFAULT_SETTINGS,
+    levelObj?.settings ?? {}
+  );
 
-  // ✅ RTDB: there are no authored nodes in DB (but keep support if you add later)
-  let levelStateNodes =
-    levelObj?.stateNodes ??
-    levelObj?.states ??
-    levelObj?.nodes ??
-    null;
+  let nodes = buildStateNodesForLevel({
+    level: levelObj,
+    story: game,
+    levelIndex,
+  });
 
-  // ✅ Always build dynamically if none provided
-  if (!Array.isArray(levelStateNodes) || levelStateNodes.length === 0) {
-    levelStateNodes = buildStateNodesForLevel({
-      level: levelObj,  // ✅ pass plain object
-      story: game,      // ✅ full game (contains storyline)
-      levelIndex,
-    });
-  }
+  if (!Array.isArray(nodes)) nodes = [];
 
-  if (!Array.isArray(levelStateNodes)) levelStateNodes = [];
-
-  if (levelStateNodes.length === 0) {
+  if (nodes.length === 0) {
     const lvlId = levelObj?.id ?? `(index ${levelIndex})`;
     throw new Error(
       `No playable states for level ${lvlId}. ` +
-        `Expected: game.storyline[${levelIndex}] to include intro/outro dialogues ` +
-        `and/or game.levels[${levelIndex}].poses to include poses.`
+        `Expected storyline or poses to generate states.`
     );
   }
 
   const nodeIndex =
     typeof initialNodeIndex === "number" && initialNodeIndex >= 0
-      ? Math.min(initialNodeIndex, Math.max(0, levelStateNodes.length - 1))
+      ? Math.min(initialNodeIndex, Math.max(0, nodes.length - 1))
       : 0;
 
-  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const now =
+    typeof performance !== "undefined"
+      ? performance.now()
+      : Date.now();
 
   return {
-    version: 1,
+    version: 1,  // schema version
 
-    playId,
-    gameId: game.id ?? null,
-    levelId: levelObj?.id ?? null,
+    playId,  // this specific playthrough
+    gameId: game.id ?? null,  // which game
+    levelId: levelObj?.id ?? null,  // which level
 
-    game,
-    levelIndex,
+    // These don’t change during a level.
+    game,  // full game object (levels, storyline, etc.)
+    levelIndex,  // which level we’re currently on
 
-    levelStateNodes,
-    nodeIndex,
-    node: levelStateNodes[nodeIndex] ?? null,
+    // This is what drives StateRenderer.
+    nodes,  // ordered list of state nodes for this level (intro → intuition → tween → poseMatch → insight → outro)
+    nodeIndex,  // current position in that list
+    node: nodes[nodeIndex] ?? null,  // so we don’t constantly write session.nodes[session.nodeIndex]
 
     dialogueIndex: 0,
 
@@ -113,15 +131,47 @@ export function createSession({
   };
 }
 
-/* ---------------------------- helpers ---------------------------- */
+// TODO: Move clampInt into a util file
+function clampInt(n, { min = 1, max = Infinity } = {}) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  const v = Math.trunc(x);
+  return Math.max(min, Math.min(max, v));
+}
 
 function mergeSettings(defaults, overrides) {
+  const d = defaults ?? {};
   const o = overrides ?? {};
-  return {
-    ...defaults,
+
+  const merged = {
+    ...d,
     ...o,
-    cursor: { ...defaults.cursor, ...(o.cursor ?? {}) },
-    pose: { ...defaults.pose, ...(o.pose ?? {}) },
-    ui: { ...defaults.ui, ...(o.ui ?? {}) },
+
+    include: { ...(d.include ?? {}), ...(o.include ?? {}) },
+    states: { ...(d.states ?? {}), ...(o.states ?? {}) },
+    ui: { ...(d.ui ?? {}), ...(o.ui ?? {}) },
+
+    reps: {
+      ...(d.reps ?? {}),
+      ...(o.reps ?? {}),
+    },
   };
+
+  merged.reps = {
+    poseMatch: clampInt(merged.reps?.poseMatch ?? 1, {
+      min: 1,
+      max: 999,
+    }),
+    tween: clampInt(merged.reps?.tween ?? 1, {
+      min: 1,
+      max: 999,
+    }),
+  };
+
+  merged.logFPS = clampInt(merged.logFPS ?? 15, {
+    min: 1,
+    max: 120,
+  });
+
+  return merged;
 }
