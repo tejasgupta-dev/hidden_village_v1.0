@@ -98,6 +98,7 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
       level?.introCursorDelayMS ??
       level?.cursorDelayMS ??
       level?.settings?.cursor?.delayMS ??
+      level?.cursor?.delayMS ??
       undefined
     );
   }
@@ -109,6 +110,7 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
       level?.outroCursorDelayMS ??
       level?.cursorDelayMS ??
       level?.settings?.cursor?.delayMS ??
+      level?.cursor?.delayMS ??
       undefined
     );
   }
@@ -119,6 +121,7 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
     level?.poseCursorDelayMS ??
     level?.cursorDelayMS ??
     level?.settings?.cursor?.delayMS ??
+    level?.cursor?.delayMS ??
     undefined
   );
 }
@@ -167,14 +170,26 @@ function resolvePoseTolerances({ storyLevel, level }, poseIds) {
   });
 }
 
-function getStateEnabled(level, key, fallback = true) {
-  const flags = level?.settings?.states;
-  if (!isPlainObject(flags)) return fallback;
+/**
+ * Prefer merged session settings (passed in) over level.settings
+ * so DEFAULT_SETTINGS.states.poseMatch=false actually works.
+ */
+function getStateEnabled({ level, settings }, key, fallback = true) {
+  const flags =
+    (settings?.states && isPlainObject(settings.states) ? settings.states : null) ??
+    (level?.settings?.states && isPlainObject(level.settings.states) ? level.settings.states : null);
+
+  if (!flags) return fallback;
   if (!Object.prototype.hasOwnProperty.call(flags, key)) return fallback;
   return flags[key] === true;
 }
 
-export function buildStateNodesForLevel({ level: levelInput, story: gameInput, levelIndex = 0 }) {
+export function buildStateNodesForLevel({
+  level: levelInput,
+  story: gameInput,
+  levelIndex = 0,
+  settings = null, // <-- merged settings from createSession
+}) {
   // RTDB: treat as plain objects
   const level = levelInput ?? null;
   const game = gameInput ?? null;
@@ -186,9 +201,12 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
   const levelId = level?.id ?? null;
   const gameId = game?.id ?? null;
 
+  // eslint-disable-next-line no-console
+  console.log("[builder] effective settings.states:", settings?.states ?? level?.settings?.states);
+
   /* ----------------------------- INTRO ----------------------------- */
   const introLines = normalizeDialogueLines(storyLevel?.intro);
-  if (getStateEnabled(level, "intro", true) && introLines.length > 0) {
+  if (getStateEnabled({ level, settings }, "intro", true) && introLines.length > 0) {
     nodes.push({
       type: STATE_TYPES.INTRO,
       lines: introLines,
@@ -211,18 +229,14 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
   const hasOptions = options.length >= 1;
 
   // eslint-disable-next-line no-console
-  console.log("buildstatenodes log level", level);
-  // eslint-disable-next-line no-console
   console.log("[builder] question:", question, "hasQuestion:", hasQuestion);
   // eslint-disable-next-line no-console
   console.log("[builder] trueFalseEnabled:", trueFalseEnabled);
   // eslint-disable-next-line no-console
   console.log("[builder] options.length:", options.length);
-  // eslint-disable-next-line no-console
-  console.log("[builder] settings.states:", level?.settings?.states);
 
   // INTUITION only if enabled + question exists + trueFalseEnabled
-  if (getStateEnabled(level, "intuition", true) && hasQuestion && trueFalseEnabled) {
+  if (getStateEnabled({ level, settings }, "intuition", true) && hasQuestion && trueFalseEnabled) {
     nodes.push({
       type: STATE_TYPES.INTUITION,
       question,
@@ -235,7 +249,7 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
   }
 
   // INSIGHT only if enabled + question exists + options exist
-  if (getStateEnabled(level, "insight", true) && hasQuestion && hasOptions) {
+  if (getStateEnabled({ level, settings }, "insight", true) && hasQuestion && hasOptions) {
     nodes.push({
       type: STATE_TYPES.INSIGHT,
       question,
@@ -250,7 +264,7 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
   const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
   const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  if (getStateEnabled(level, "tween", true) && poseIds.length >= 2) {
+  if (getStateEnabled({ level, settings }, "tween", true) && poseIds.length >= 2) {
     nodes.push({
       type: STATE_TYPES.TWEEN,
       poseIds,
@@ -262,7 +276,7 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
     });
   }
 
-  if (getStateEnabled(level, "poseMatch", true) && poseIds.length >= 1) {
+  if (getStateEnabled({ level, settings }, "poseMatch", true) && poseIds.length >= 1) {
     const defaultTolerance = resolveDefaultPoseTolerance({ storyLevel, level });
     const poseTolerances = resolvePoseTolerances({ storyLevel, level }, poseIds);
 
@@ -281,7 +295,7 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
 
   /* ----------------------------- OUTRO ----------------------------- */
   const outroLines = normalizeDialogueLines(storyLevel?.outro);
-  if (getStateEnabled(level, "outro", true) && outroLines.length > 0) {
+  if (getStateEnabled({ level, settings }, "outro", true) && outroLines.length > 0) {
     nodes.push({
       type: STATE_TYPES.OUTRO,
       lines: outroLines,

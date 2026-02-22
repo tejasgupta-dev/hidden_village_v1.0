@@ -76,6 +76,7 @@ export function createSession({
     level: levelObj,
     story: game,
     levelIndex,
+    settings,
   });
 
   if (!Array.isArray(nodes)) nodes = [];
