@@ -1,5 +1,23 @@
 import { apiClient } from "./apiClient";
 
+/* ------------------ helpers ------------------ */
+function buildQuery(params = {}) {
+  const entries = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== null
+  );
+
+  // URLSearchParams expects strings; stringify everything.
+  const qp = new URLSearchParams(
+    entries.map(([k, v]) => [k, String(v)])
+  ).toString();
+
+  return qp ? `?${qp}` : "";
+}
+
+function buildPinHeaders(pin) {
+  return pin ? { "x-level-pin": pin } : {};
+}
+
 /**
  * Low-level HTTP API for levels
  * Pure HTTP operations with no business logic
@@ -12,14 +30,16 @@ export const levelsApi = {
    * @returns {Promise<{success: boolean, levels: Array}>}
    */
   list(params = {}, options = {}) {
-    const query = new URLSearchParams(params).toString();
-    return apiClient(`/api/levels${query ? `?${query}` : ""}`, {
+    const query = buildQuery(params);
+    return apiClient(`/api/levels${query}`, {
       credentials: options.credentials || "omit",
     });
   },
 
   listPublished(options = {}) {
-    return this.list({ publishedOnly: "true" }, { credentials: options.credentials || "include" });
+    return apiClient(`/api/levels${buildQuery({ publishedOnly: true })}`, {
+      credentials: options.credentials || "include",
+    });
   },
 
   /**
@@ -33,16 +53,11 @@ export const levelsApi = {
    */
   get(levelId, options = {}) {
     const { pin, params = {}, credentials = "omit" } = options;
-    const query = new URLSearchParams(params).toString();
+    const query = buildQuery(params);
 
-    const headers = {};
-    if (pin) {
-      headers["x-level-pin"] = pin;
-    }
-
-    return apiClient(`/api/levels/${levelId}${query ? `?${query}` : ""}`, {
+    return apiClient(`/api/levels/${levelId}${query}`, {
       credentials,
-      headers,
+      headers: buildPinHeaders(pin),
     });
   },
 
@@ -55,6 +70,7 @@ export const levelsApi = {
     return apiClient("/api/levels", {
       method: "POST",
       credentials: "include",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(levelData),
     });
   },
@@ -70,15 +86,13 @@ export const levelsApi = {
   update(levelId, updates, options = {}) {
     const { pin } = options;
 
-    const headers = {};
-    if (pin) {
-      headers["x-level-pin"] = pin;
-    }
-
     return apiClient(`/api/levels/${levelId}`, {
       method: "PATCH",
       credentials: "include",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+        ...buildPinHeaders(pin),
+      },
       body: JSON.stringify(updates),
     });
   },
@@ -93,15 +107,10 @@ export const levelsApi = {
   remove(levelId, options = {}) {
     const { pin } = options;
 
-    const headers = {};
-    if (pin) {
-      headers["x-level-pin"] = pin;
-    }
-
     return apiClient(`/api/levels/${levelId}`, {
       method: "DELETE",
       credentials: "include",
-      headers,
+      headers: buildPinHeaders(pin),
     });
   },
 };

@@ -4,6 +4,102 @@ import levelsApi from "@/lib/api/levels.api";
  * Domain logic for level editing and management
  * Requires authentication
  */
+
+/* ------------------ SETTINGS VALIDATION ------------------ */
+const DEFAULT_LEVEL_SETTINGS = {
+  logFPS: 15,
+  include: {
+    face: false,
+    leftArm: true,
+    rightArm: true,
+    leftLeg: true,
+    rightLeg: true,
+    hands: false,
+  },
+  states: {
+    intro: true,
+    intuition: true,
+    tween: true,
+    poseMatch: false,
+    insight: true,
+    outro: true,
+  },
+  reps: {
+    poseMatch: 2,
+    tween: 2,
+  },
+  ui: {
+    dialogueFontSize: 20,
+  },
+};
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function validateSettings(settings) {
+  // settings is optional
+  if (settings === undefined || settings === null) return { valid: true };
+
+  if (!isPlainObject(settings)) {
+    return { valid: false, error: "settings must be an object" };
+  }
+
+  // logFPS (optional)
+  if (settings.logFPS !== undefined) {
+    const n = Number(settings.logFPS);
+    if (!Number.isFinite(n) || n < 1 || n > 120) {
+      return { valid: false, error: "settings.logFPS must be a number between 1 and 120" };
+    }
+  }
+
+  // include/states/ui/reps are optional but must be objects if present
+  const objectKeys = ["include", "states", "reps", "ui"];
+  for (const k of objectKeys) {
+    if (settings[k] !== undefined && !isPlainObject(settings[k])) {
+      return { valid: false, error: `settings.${k} must be an object` };
+    }
+  }
+
+  // dialogueFontSize (optional)
+  if (settings.ui?.dialogueFontSize !== undefined) {
+    const n = Number(settings.ui.dialogueFontSize);
+    if (!Number.isFinite(n) || n < 10 || n > 64) {
+      return { valid: false, error: "settings.ui.dialogueFontSize must be between 10 and 64" };
+    }
+  }
+
+  // reps (optional)
+  if (settings.reps?.poseMatch !== undefined) {
+    const n = Number(settings.reps.poseMatch);
+    if (!Number.isFinite(n) || n < 1 || n > 20) {
+      return { valid: false, error: "settings.reps.poseMatch must be between 1 and 20" };
+    }
+  }
+
+  if (settings.reps?.tween !== undefined) {
+    const n = Number(settings.reps.tween);
+    if (!Number.isFinite(n) || n < 1 || n > 20) {
+      return { valid: false, error: "settings.reps.tween must be between 1 and 20" };
+    }
+  }
+
+  // Shallow key safety: block obviously wrong types for include/states
+  // (We don't require full completeness; your hook merges defaults anyway.)
+  for (const [k, v] of Object.entries(settings.include ?? {})) {
+    if (typeof v !== "boolean") {
+      return { valid: false, error: `settings.include.${k} must be boolean` };
+    }
+  }
+  for (const [k, v] of Object.entries(settings.states ?? {})) {
+    if (typeof v !== "boolean") {
+      return { valid: false, error: `settings.states.${k} must be boolean` };
+    }
+  }
+
+  return { valid: true };
+}
+
 export const levelEditor = {
   /**
    * Load a level for editing
@@ -13,6 +109,9 @@ export const levelEditor = {
    * @returns {Promise<{success: boolean, level: Object}>}
    */
   async load(levelId, options = {}) {
+    // ✅ Keep request options separate from the "data" payload.
+    // Assumes levelsApi.get(id, { pin, credentials }) accepts an options object.
+    // If your levelsApi.get signature is (id, params, opts), adjust accordingly.
     return levelsApi.get(levelId, {
       pin: options.pin,
       credentials: "include",
@@ -41,330 +140,152 @@ export const levelEditor = {
    * @returns {Promise<{success: boolean, level: Object}>}
    */
   async save(levelId, updates, options = {}) {
+    // ✅ Validate settings if present in updates (prevents bad writes)
+    if (updates && Object.prototype.hasOwnProperty.call(updates, "settings")) {
+      const v = validateSettings(updates.settings);
+      if (!v.valid) throw new Error(v.error);
+    }
+
     return levelsApi.update(levelId, updates, { pin: options.pin });
   },
 
   /**
    * Delete a level
-   * @param {string} levelId - The level ID
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, message: string}>}
    */
   async delete(levelId, options = {}) {
     return levelsApi.remove(levelId, { pin: options.pin });
   },
 
-  /**
-   * Publish a level
-   * @param {string} levelId - The level ID
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async publish(levelId, options = {}) {
     return levelsApi.update(levelId, { isPublished: true }, { pin: options.pin });
   },
 
-  /**
-   * Unpublish a level
-   * @param {string} levelId - The level ID
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async unpublish(levelId, options = {}) {
     return levelsApi.update(levelId, { isPublished: false }, { pin: options.pin });
   },
 
-  /**
-   * Toggle publish status
-   * @param {string} levelId - The level ID
-   * @param {boolean} currentStatus - Current published status
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async togglePublish(levelId, currentStatus, options = {}) {
     return levelsApi.update(levelId, { isPublished: !currentStatus }, { pin: options.pin });
   },
 
-  /**
-   * Set or update level PIN
-   * @param {string} levelId - The level ID
-   * @param {string} pin - The PIN to set
-   * @param {Object} options - Optional parameters
-   * @param {string} options.currentPin - Current PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async setPin(levelId, pin, options = {}) {
     const validation = validatePin(pin);
-    if (!validation.valid) {
-      throw new Error(validation.error);
-    }
+    if (!validation.valid) throw new Error(validation.error);
     return levelsApi.update(levelId, { pin }, { pin: options.currentPin });
   },
 
-  /**
-   * Remove level PIN
-   * @param {string} levelId - The level ID
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - Current PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async removePin(levelId, options = {}) {
     return levelsApi.update(levelId, { pin: "" }, { pin: options.pin });
   },
 
-  /**
-   * Update level name
-   * @param {string} levelId - The level ID
-   * @param {string} name - New name
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async updateName(levelId, name, options = {}) {
     const validation = validateLevelName(name);
-    if (!validation.valid) {
-      throw new Error(validation.error);
-    }
+    if (!validation.valid) throw new Error(validation.error);
     return levelsApi.update(levelId, { name }, { pin: options.pin });
   },
 
-  /**
-   * Update level description
-   * @param {string} levelId - The level ID
-   * @param {string} description - New description
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async updateDescription(levelId, description, options = {}) {
     return levelsApi.update(levelId, { description }, { pin: options.pin });
   },
 
-  /**
-   * Update level keywords
-   * @param {string} levelId - The level ID
-   * @param {string} keywords - New keywords
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async updateKeywords(levelId, keywords, options = {}) {
     return levelsApi.update(levelId, { keywords }, { pin: options.pin });
   },
 
-  /**
-   * Update level options
-   * @param {string} levelId - The level ID
-   * @param {Array} options - Options array
-   * @param {Object} opts - Optional parameters
-   * @param {string} opts.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
-  async updateOptions(levelId, options, opts = {}) {
-    return levelsApi.update(levelId, { options }, { pin: opts.pin });
+  async updateOptions(levelId, optionsArr, opts = {}) {
+    return levelsApi.update(levelId, { options: optionsArr }, { pin: opts.pin });
   },
 
-  /**
-   * Update level answers
-   * @param {string} levelId - The level ID
-   * @param {Array} answers - Answers array
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async updateAnswers(levelId, answers, options = {}) {
     return levelsApi.update(levelId, { answers }, { pin: options.pin });
   },
 
-  /**
-   * Update level poses
-   * @param {string} levelId - The level ID
-   * @param {Object} poses - Poses object
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async updatePoses(levelId, poses, options = {}) {
     return levelsApi.update(levelId, { poses }, { pin: options.pin });
   },
 
   /**
-   * Add an option to the level
-   * @param {string} levelId - The level ID
-   * @param {*} option - Option to add
-   * @param {Array} currentOptions - Current options
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
+   * ✅ Settings helpers (clear intent + centralized validation)
    */
+  async updateSettings(levelId, settings, options = {}) {
+    const v = validateSettings(settings);
+    if (!v.valid) throw new Error(v.error);
+    return levelsApi.update(levelId, { settings }, { pin: options.pin });
+  },
+
+  async resetSettings(levelId, options = {}) {
+    return levelsApi.update(levelId, { settings: DEFAULT_LEVEL_SETTINGS }, { pin: options.pin });
+  },
+
   async addOption(levelId, option, currentOptions = [], options = {}) {
     const opts = [...currentOptions, option];
     return levelsApi.update(levelId, { options: opts }, { pin: options.pin });
   },
 
-  /**
-   * Remove an option from the level
-   * @param {string} levelId - The level ID
-   * @param {number} index - Index to remove
-   * @param {Array} currentOptions - Current options
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async removeOption(levelId, index, currentOptions = [], options = {}) {
     const opts = currentOptions.filter((_, i) => i !== index);
     return levelsApi.update(levelId, { options: opts }, { pin: options.pin });
   },
 
-  /**
-   * Add an answer to the level
-   * @param {string} levelId - The level ID
-   * @param {*} answer - Answer to add
-   * @param {Array} currentAnswers - Current answers
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async addAnswer(levelId, answer, currentAnswers = [], options = {}) {
     const answers = [...currentAnswers, answer];
     return levelsApi.update(levelId, { answers }, { pin: options.pin });
   },
 
-  /**
-   * Remove an answer from the level
-   * @param {string} levelId - The level ID
-   * @param {number} index - Index to remove
-   * @param {Array} currentAnswers - Current answers
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async removeAnswer(levelId, index, currentAnswers = [], options = {}) {
     const answers = currentAnswers.filter((_, i) => i !== index);
     return levelsApi.update(levelId, { answers }, { pin: options.pin });
   },
 
-  /**
-   * Update a pose in the level
-   * @param {string} levelId - The level ID
-   * @param {string} poseKey - Pose key
-   * @param {*} poseValue - Pose value
-   * @param {Object} currentPoses - Current poses
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async updatePose(levelId, poseKey, poseValue, currentPoses = {}, options = {}) {
     const poses = { ...currentPoses, [poseKey]: poseValue };
     return levelsApi.update(levelId, { poses }, { pin: options.pin });
   },
 
-  /**
-   * Remove a pose from the level
-   * @param {string} levelId - The level ID
-   * @param {string} poseKey - Pose key to remove
-   * @param {Object} currentPoses - Current poses
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async removePose(levelId, poseKey, currentPoses = {}, options = {}) {
     const poses = { ...currentPoses };
     delete poses[poseKey];
     return levelsApi.update(levelId, { poses }, { pin: options.pin });
   },
 
-  /**
-   * Save multiple fields at once (batch update)
-   * @param {string} levelId - The level ID
-   * @param {Object} fields - Multiple fields to update
-   * @param {Object} options - Optional parameters
-   * @param {string} options.pin - PIN for protected levels
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   async saveMultiple(levelId, fields, options = {}) {
+    // Validate settings if included in batch
+    if (fields && Object.prototype.hasOwnProperty.call(fields, "settings")) {
+      const v = validateSettings(fields.settings);
+      if (!v.valid) throw new Error(v.error);
+    }
     return levelsApi.update(levelId, fields, { pin: options.pin });
   },
 };
 
-/**
- * Validate level name
- * @param {string} name - Level name
- * @returns {{valid: boolean, error?: string}}
- */
+/* ------------------ VALIDATORS (existing) ------------------ */
 export function validateLevelName(name) {
-  if (!name || typeof name !== "string") {
-    return { valid: false, error: "Name is required" };
-  }
-  if (name.trim() === "") {
-    return { valid: false, error: "Name cannot be empty" };
-  }
-  if (name.length > 100) {
-    return { valid: false, error: "Name is too long (max 100 characters)" };
-  }
+  if (!name || typeof name !== "string") return { valid: false, error: "Name is required" };
+  if (name.trim() === "") return { valid: false, error: "Name cannot be empty" };
+  if (name.length > 100) return { valid: false, error: "Name is too long (max 100 characters)" };
   return { valid: true };
 }
 
-/**
- * Validate PIN format
- * @param {string} pin - PIN to validate
- * @returns {{valid: boolean, error?: string}}
- */
 export function validatePin(pin) {
-  if (pin === "" || pin === null || pin === undefined) {
-    return { valid: true }; // Empty PIN is valid (means no PIN)
-  }
-  if (typeof pin !== "string") {
-    return { valid: false, error: "PIN must be a string" };
-  }
-  if (pin.length < 4) {
-    return { valid: false, error: "PIN must be at least 4 characters" };
-  }
-  if (pin.length > 20) {
-    return { valid: false, error: "PIN is too long (max 20 characters)" };
-  }
+  if (pin === "" || pin === null || pin === undefined) return { valid: true };
+  if (typeof pin !== "string") return { valid: false, error: "PIN must be a string" };
+  if (pin.length < 4) return { valid: false, error: "PIN must be at least 4 characters" };
+  if (pin.length > 20) return { valid: false, error: "PIN is too long (max 20 characters)" };
   return { valid: true };
 }
 
-/**
- * Validate options array
- * @param {Array} options - Options to validate
- * @returns {{valid: boolean, error?: string}}
- */
 export function validateOptions(options) {
-  if (!Array.isArray(options)) {
-    return { valid: false, error: "Options must be an array" };
-  }
-  if (options.length === 0) {
-    return { valid: false, error: "At least one option is required" };
-  }
+  if (!Array.isArray(options)) return { valid: false, error: "Options must be an array" };
+  if (options.length === 0) return { valid: false, error: "At least one option is required" };
   return { valid: true };
 }
 
-/**
- * Validate answers array
- * @param {Array} answers - Answers to validate
- * @returns {{valid: boolean, error?: string}}
- */
 export function validateAnswers(answers) {
-  if (!Array.isArray(answers)) {
-    return { valid: false, error: "Answers must be an array" };
-  }
-  if (answers.length === 0) {
-    return { valid: false, error: "At least one answer is required" };
-  }
+  if (!Array.isArray(answers)) return { valid: false, error: "Answers must be an array" };
+  if (answers.length === 0) return { valid: false, error: "At least one answer is required" };
   return { valid: true };
 }
 
-/**
- * Validate poses object
- * @param {Object} poses - Poses to validate
- * @returns {{valid: boolean, error?: string}}
- */
 export function validatePoses(poses) {
   if (typeof poses !== "object" || poses === null || Array.isArray(poses)) {
     return { valid: false, error: "Poses must be an object" };
@@ -372,62 +293,42 @@ export function validatePoses(poses) {
   return { valid: true };
 }
 
-/**
- * Validate level data
- * @param {Object} levelData - Level data to validate
- * @returns {{valid: boolean, error?: string}}
- */
 export function validateLevelData(levelData) {
   const nameValidation = validateLevelName(levelData.name);
-  if (!nameValidation.valid) {
-    return nameValidation;
-  }
+  if (!nameValidation.valid) return nameValidation;
 
   if (levelData.pin) {
     const pinValidation = validatePin(levelData.pin);
-    if (!pinValidation.valid) {
-      return pinValidation;
-    }
+    if (!pinValidation.valid) return pinValidation;
+  }
+
+  // ✅ validate settings on create too
+  if (Object.prototype.hasOwnProperty.call(levelData, "settings")) {
+    const settingsValidation = validateSettings(levelData.settings);
+    if (!settingsValidation.valid) return settingsValidation;
   }
 
   return { valid: true };
 }
 
-/**
- * Check if level has unsaved changes
- * @param {Object} original - Original level data
- * @param {Object} current - Current level data
- * @returns {boolean}
- */
+/* ------------------ helpers (unchanged) ------------------ */
 export function hasUnsavedChanges(original, current) {
   const fields = ["name", "description", "keywords", "pin", "isPublished"];
-  
+
   for (const field of fields) {
-    if (original[field] !== current[field]) {
-      return true;
-    }
+    if (original[field] !== current[field]) return true;
   }
 
-  if (JSON.stringify(original.options) !== JSON.stringify(current.options)) {
-    return true;
-  }
+  if (JSON.stringify(original.options) !== JSON.stringify(current.options)) return true;
+  if (JSON.stringify(original.answers) !== JSON.stringify(current.answers)) return true;
+  if (JSON.stringify(original.poses) !== JSON.stringify(current.poses)) return true;
 
-  if (JSON.stringify(original.answers) !== JSON.stringify(current.answers)) {
-    return true;
-  }
-
-  if (JSON.stringify(original.poses) !== JSON.stringify(current.poses)) {
-    return true;
-  }
+  // ✅ include settings in dirty check
+  if (JSON.stringify(original.settings || {}) !== JSON.stringify(current.settings || {})) return true;
 
   return false;
 }
 
-/**
- * Create a new empty level object
- * @param {string} name - Level name
- * @returns {Object} New level data
- */
 export function createEmptyLevel(name = "New Level") {
   return {
     name,
@@ -438,14 +339,10 @@ export function createEmptyLevel(name = "New Level") {
     pin: "",
     isPublished: false,
     poses: {},
+    settings: DEFAULT_LEVEL_SETTINGS,
   };
 }
 
-/**
- * Clone level data for editing
- * @param {Object} level - Level to clone
- * @returns {Object} Cloned level
- */
 export function cloneLevelData(level) {
   return {
     name: level.name,
@@ -456,6 +353,7 @@ export function cloneLevelData(level) {
     pin: level.pin || "",
     isPublished: level.isPublished || false,
     poses: JSON.parse(JSON.stringify(level.poses || {})),
+    settings: JSON.parse(JSON.stringify(level.settings || DEFAULT_LEVEL_SETTINGS)),
   };
 }
 

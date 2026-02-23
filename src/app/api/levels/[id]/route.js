@@ -4,8 +4,7 @@ import { requireSession, isAdmin } from "@/lib/firebase/requireSession";
 
 export const runtime = "nodejs";
 
-const isPlainObject = (v) =>
-  !!v && typeof v === "object" && !Array.isArray(v);
+const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 
 const clamp = (n, min, max) => {
   const x = Number(n);
@@ -32,20 +31,111 @@ function normalizePoseToleranceMap(v) {
   return out;
 }
 
+/* ------------------ SETTINGS NORMALIZATION ------------------ */
+const DEFAULT_SETTINGS = {
+  logFPS: 15,
+  include: {
+    face: false,
+    leftArm: true,
+    rightArm: true,
+    leftLeg: true,
+    rightLeg: true,
+    hands: false,
+  },
+  states: {
+    intro: true,
+    intuition: true,
+    tween: true,
+    poseMatch: false,
+    insight: true,
+    outro: true,
+  },
+  reps: {
+    poseMatch: 2,
+    tween: 2,
+  },
+  ui: {
+    dialogueFontSize: 20,
+  },
+};
+
+function deepMerge(base, patch) {
+  if (!isPlainObject(base)) return patch;
+  if (!isPlainObject(patch)) return patch ?? base;
+
+  const out = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    if (isPlainObject(v) && isPlainObject(base[k])) out[k] = deepMerge(base[k], v);
+    else out[k] = v;
+  }
+  return out;
+}
+
+function normalizeSettings(raw) {
+  if (!isPlainObject(raw)) return undefined; // undefined => don’t write
+
+  // Merge onto defaults so missing keys are filled, but we still sanitize types.
+  const merged = deepMerge(DEFAULT_SETTINGS, raw);
+
+  const out = {
+    logFPS: clamp(merged.logFPS, 1, 120),
+
+    include: {
+      face: normalizeBool(merged.include?.face),
+      leftArm: normalizeBool(merged.include?.leftArm),
+      rightArm: normalizeBool(merged.include?.rightArm),
+      leftLeg: normalizeBool(merged.include?.leftLeg),
+      rightLeg: normalizeBool(merged.include?.rightLeg),
+      hands: normalizeBool(merged.include?.hands),
+    },
+
+    states: {
+      intro: normalizeBool(merged.states?.intro),
+      intuition: normalizeBool(merged.states?.intuition),
+      tween: normalizeBool(merged.states?.tween),
+      poseMatch: normalizeBool(merged.states?.poseMatch),
+      insight: normalizeBool(merged.states?.insight),
+      outro: normalizeBool(merged.states?.outro),
+    },
+
+    reps: {
+      poseMatch: clamp(merged.reps?.poseMatch, 1, 20),
+      tween: clamp(merged.reps?.tween, 1, 20),
+    },
+
+    ui: {
+      dialogueFontSize: clamp(merged.ui?.dialogueFontSize, 10, 64),
+    },
+  };
+
+  return out;
+}
+
 // Whitelist + normalize fields you allow to be patched
 function sanitizePatch(body) {
   const b = isPlainObject(body) ? body : {};
-
   const out = {};
 
-  // common fields (keep what you already support)
+  // common fields
   if (b.name !== undefined) out.name = String(b.name);
   if (b.keywords !== undefined) out.keywords = String(b.keywords);
   if (b.description !== undefined) out.description = String(b.description);
   if (b.question !== undefined) out.question = String(b.question);
 
-  if (b.options !== undefined) out.options = Array.isArray(b.options) ? b.options.map((x) => String(x ?? "")) : [];
-  if (b.answers !== undefined) out.answers = Array.isArray(b.answers) ? b.answers.map((x) => Number(x)).filter(Number.isFinite) : [];
+  if (b.options !== undefined) {
+    out.options = Array.isArray(b.options) ? b.options.map((x) => String(x ?? "")) : [];
+  }
+
+  if (b.answers !== undefined) {
+    const arr = Array.isArray(b.answers) ? b.answers : [];
+    const cleaned = arr
+      .map((x) => Number(x))
+      .filter(Number.isFinite)
+      .map((x) => Math.trunc(x));
+
+    // de-dupe + sort for stability
+    out.answers = Array.from(new Set(cleaned)).sort((a, b2) => a - b2);
+  }
 
   if (b.poses !== undefined) out.poses = isPlainObject(b.poses) ? b.poses : {};
 
@@ -53,12 +143,19 @@ function sanitizePatch(body) {
     out.isPublished = normalizeBool(b.isPublished);
   }
 
-  // ✅ PIN allowed IF client sends it (your permission logic gates who can do it)
+  // PIN allowed IF client sends it
   if (Object.prototype.hasOwnProperty.call(b, "pin")) {
     out.pin = String(b.pin ?? "");
   }
 
-  // ✅ NEW: True/False gate
+  // ✅ SETTINGS (NEW)
+  if (Object.prototype.hasOwnProperty.call(b, "settings")) {
+    const norm = normalizeSettings(b.settings);
+    // If garbage sent, store empty object (or skip). Prefer skip to avoid nuking.
+    if (norm !== undefined) out.settings = norm;
+  }
+
+  // True/False gate
   if (Object.prototype.hasOwnProperty.call(b, "trueFalseEnabled")) {
     out.trueFalseEnabled = normalizeBool(b.trueFalseEnabled);
   }
@@ -66,10 +163,9 @@ function sanitizePatch(body) {
     out.trueFalseAnswer = normalizeTFAnswer(b.trueFalseAnswer);
   }
 
-  // ✅ NEW: per-pose tolerance
+  // per-pose tolerance
   if (Object.prototype.hasOwnProperty.call(b, "poseTolerancePctById")) {
     const norm = normalizePoseToleranceMap(b.poseTolerancePctById);
-    // if user sends garbage, store empty object (or skip). I prefer empty object.
     out.poseTolerancePctById = norm ?? {};
   }
 
@@ -78,7 +174,6 @@ function sanitizePatch(body) {
 
 /**
  * GET /levels/[id]
- * (unchanged)
  */
 export async function GET(req, context) {
   try {
@@ -222,7 +317,6 @@ export async function GET(req, context) {
 
 /**
  * PATCH /levels/[id]
- * (updated sanitizer)
  */
 export async function PATCH(req, context) {
   const { success, user, response } = await requireSession();
@@ -253,8 +347,7 @@ export async function PATCH(req, context) {
     const userIsAdmin = isAdmin(user);
     const userIsOwner = existing.authorUid === user.uid;
 
-    const pinRequired =
-      typeof existing.pin === "string" && existing.pin.length > 0;
+    const pinRequired = typeof existing.pin === "string" && existing.pin.length > 0;
     const providedPin = req.headers.get("x-level-pin");
 
     if (!(userIsOwner || userIsAdmin)) {
@@ -320,7 +413,6 @@ export async function PATCH(req, context) {
 
 /**
  * DELETE /levels/[id]
- * (unchanged)
  */
 export async function DELETE(req, context) {
   const { success, user, response } = await requireSession();
@@ -351,8 +443,7 @@ export async function DELETE(req, context) {
     const userIsAdmin = isAdmin(user);
     const userIsOwner = existing.authorUid === user.uid;
 
-    const pinRequired =
-      typeof existing.pin === "string" && existing.pin.length > 0;
+    const pinRequired = typeof existing.pin === "string" && existing.pin.length > 0;
     const providedPin = req.headers.get("x-level-pin");
 
     if (!(userIsOwner || userIsAdmin)) {

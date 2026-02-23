@@ -1,245 +1,205 @@
-"use client";
+// app/game/play/[id]/page.jsx
+import { db } from "@/lib/firebase/firebaseAdmin";
+import GamePlayerClient from "./playerClient";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+export const dynamic = "force-dynamic";
 
-import gamesApi from "@/lib/api/games.api";
-import GamePlayer from "@/lib/gamePlayer/gamePlayer";
+/* ----------------------------- helpers ----------------------------- */
 
-function normalizePosesToMatch(poses) {
-  if (!poses) return [];
-
-  // If already an array, try to parse entries
-  if (Array.isArray(poses)) {
-    return poses
-      .map((v) => {
-        if (v == null) return null;
-        if (typeof v === "string") {
-          try {
-            return JSON.parse(v);
-          } catch {
-            return null;
-          }
-        }
-        return v;
-      })
-      .filter(Boolean);
-  }
-
-  if (typeof poses !== "object") return [];
-
-  // Stable order by key
-  const keys = Object.keys(poses).sort();
-  return keys
-    .map((k) => poses[k])
-    .map((v) => {
-      if (v == null) return null;
-      if (typeof v === "string") {
-        try {
-          return JSON.parse(v);
-        } catch {
-          return null;
-        }
-      }
-      return v;
-    })
-    .filter(Boolean);
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-export default function PlayGamePage() {
-  const router = useRouter();
-  const params = useParams();
-  const rawId = params?.id;
-  const gameId = Array.isArray(rawId) ? rawId[0] : rawId;
+function clamp(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [gameData, setGameData] = useState(null);
+function normalizeBool(v) {
+  return v === true || v === "true";
+}
 
-  const [started, setStarted] = useState(false);
-  const [completed, setCompleted] = useState(false);
+/**
+ * RTDB poses may come back as:
+ *  - object: { pose_123: "{\"pose\":{...},\"tolerancePct\":69}", ... }
+ *  - or already-parsed object in some cases
+ *
+ * We normalize to:
+ *  - poses: { pose_123: <poseObject>, ... }  // what PoseDrawer + matcher expects
+ *  - poseTolerancePctById: { pose_123: 69, ... } // optional per-pose tolerance map
+ */
+function normalizePoses(rawPoses) {
+  const poses = {};
+  const poseTolerancePctById = {};
 
-  useEffect(() => {
-    let mounted = true;
+  if (!rawPoses) return { poses, poseTolerancePctById };
 
-    async function load() {
-      if (!gameId) return;
-      setLoading(true);
-      setError("");
+  // RTDB can return array-ish or object; treat both
+  const entries = Array.isArray(rawPoses)
+    ? rawPoses.map((v, i) => [`pose_${i}`, v])
+    : Object.entries(rawPoses);
 
+  for (const [poseIdRaw, raw] of entries) {
+    const poseId = String(poseIdRaw || "").trim();
+    if (!poseId) continue;
+
+    let parsed = raw;
+
+    // 1) If it's a JSON string, parse it
+    if (typeof raw === "string") {
       try {
-        // IMPORTANT: gamesApi.get expects query params inside { params: {...} }
-        const gameRes = await gamesApi.get(gameId, { params: { mode: "play" } });
-        if (!gameRes?.success || !gameRes?.game) {
-          throw new Error(gameRes?.message || "Failed to load game");
-        }
-
-        const levelsRes = await gamesApi.getLevels(gameId);
-        if (!levelsRes?.success || !Array.isArray(levelsRes?.levels)) {
-          throw new Error(levelsRes?.message || "Failed to load levels");
-        }
-
-        // Shape data to what GamePlayer expects.
-        const levels = levelsRes.levels.map((lvl) => ({
-          ...lvl,
-          dialogues: lvl.dialogues || { intro: [], outro: [] },
-          tween: lvl.tween || null,
-          insights: lvl.insights || [],
-          posesToMatch: lvl.posesToMatch || normalizePosesToMatch(lvl.poses),
-        }));
-
-        const data = {
-          ...gameRes.game,
-          levels,
-        };
-
-        if (mounted) setGameData(data);
-      } catch (e) {
-        console.error(e);
-        if (mounted) setError(e?.message || "Failed to load game");
-      } finally {
-        if (mounted) setLoading(false);
+        parsed = JSON.parse(raw);
+      } catch {
+        // skip invalid JSON
+        continue;
       }
     }
 
-    load();
-    return () => {
-      mounted = false;
-    };
-  }, [gameId]);
+    // 2) If it's { pose: {...}, tolerancePct }, extract pose + map tolerance
+    if (isPlainObject(parsed) && isPlainObject(parsed.pose)) {
+      poses[poseId] = parsed.pose;
 
-  const title = useMemo(() => gameData?.name || "Game", [gameData]);
+      if (parsed.tolerancePct != null && parsed.tolerancePct !== "") {
+        poseTolerancePctById[poseId] = clamp(parsed.tolerancePct, 0, 100);
+      }
+      continue;
+    }
 
-  // Force recordings off until play logging endpoints are solid
-  const playerSettings = useMemo(() => {
-    const base = gameData?.settings || {};
-    return {
-      fps: typeof base.fps === "number" ? base.fps : 12,
-      skipStates: Array.isArray(base.skipStates) ? base.skipStates : [],
-      poseRecording: false,
-      mediaRecording: false,
-      eventRecording: false,
-    };
-  }, [gameData]);
+    // 3) If it's already a pose-like object, store it directly
+    if (isPlainObject(parsed)) {
+      poses[poseId] = parsed;
+      continue;
+    }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3"></div>
-          <p className="text-gray-900 text-sm">Loading game...</p>
-        </div>
-      </div>
-    );
+    // else: skip
   }
 
-  if (error) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
-        <p className="text-center text-xl text-red-600">⚠️ {error}</p>
-        <button
-          type="button"
-          onClick={() => router.back()}
-          className="border px-4 py-2 rounded hover:bg-gray-50"
-        >
-          Back
-        </button>
-      </div>
-    );
-  }
+  return { poses, poseTolerancePctById };
+}
 
-  if (!gameData) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-center text-xl text-gray-700">Game not found.</p>
-      </div>
-    );
-  }
+function toPlayableLevel(levelId, level) {
+  const question = typeof level?.question === "string" ? level.question : "";
 
-  const levelCount = Array.isArray(gameData.levels) ? gameData.levels.length : 0;
+  const trueFalseEnabled = normalizeBool(level?.trueFalseEnabled);
+  const trueFalseAnswer =
+    typeof level?.trueFalseAnswer === "boolean"
+      ? level.trueFalseAnswer
+      : level?.trueFalseAnswer === "true"
+      ? true
+      : level?.trueFalseAnswer === "false"
+      ? false
+      : null;
 
-  if (!started) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-xl bg-white border border-gray-200 rounded-xl shadow p-6">
-          <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
+  // options can be array OR RTDB object {0:"...",1:"..."} — keep as-is, builder normalizes
+  const options = level?.options ?? [];
 
-          {gameData.description ? (
-            <p className="text-gray-600 mt-2">{gameData.description}</p>
-          ) : null}
+  // ✅ IMPORTANT: normalize RTDB pose JSON strings -> objects
+  const { poses, poseTolerancePctById: tolFromPoses } = normalizePoses(level?.poses ?? {});
 
-          <p className="text-gray-500 mt-4 text-sm">Levels: {levelCount}</p>
+  // allow explicit map on level to override / extend parsed tolerances
+  const tolFromLevel =
+    level?.poseTolerancePctById && typeof level.poseTolerancePctById === "object"
+      ? level.poseTolerancePctById
+      : {};
 
-          {levelCount === 0 ? (
-            <p className="mt-3 text-sm text-red-600">
-              This game has no levels yet.
-            </p>
-          ) : null}
+  const poseTolerancePctById = {
+    ...tolFromPoses,
+    ...tolFromLevel,
+  };
 
-          <div className="mt-6 flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setCompleted(false);
-                setStarted(true);
-              }}
-              disabled={levelCount === 0}
-              className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-            >
-              Start
-            </button>
+  return {
+    // identity
+    id: levelId,
+    name: level?.name ?? "",
+    description: level?.description ?? "",
+    keywords: level?.keywords ?? "",
 
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="w-full border px-4 py-2 rounded hover:bg-gray-50"
-            >
-              Back
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+    // ✅ pose content (NOW objects, not JSON strings)
+    poses,
 
-  if (completed) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-xl bg-white border border-gray-200 rounded-xl shadow p-6">
-          <h1 className="text-3xl font-bold text-gray-900">✅ Completed!</h1>
-          <p className="text-gray-600 mt-2">You finished: {title}</p>
+    // ✅ INSIGHT inputs
+    question,
+    options,
 
-          <div className="mt-6 flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setCompleted(false);
-                setStarted(false);
-              }}
-              className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            >
-              Play Again
-            </button>
+    // ✅ INTUITION inputs
+    trueFalseEnabled,
+    trueFalseAnswer,
 
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="w-full border px-4 py-2 rounded hover:bg-gray-50"
-            >
-              Back
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+    // (keep if you use these elsewhere; harmless)
+    answers: level?.answers ?? [],
 
+    // ✅ pose matching config
+    poseTolerancePctById,
+    poseThreshold: level?.poseThreshold ?? 60,
+    poseDurationMS: level?.poseDurationMS ?? null,
+
+    // tween config
+    tweenDurationMS: level?.tweenDurationMS ?? null,
+    tweenEasing: level?.tweenEasing ?? null,
+
+    // optional per-level cursor settings passthrough
+    settings: level?.settings ?? {},
+    cursorDelayMS: level?.cursorDelayMS ?? null,
+    introCursorDelayMS: level?.introCursorDelayMS ?? null,
+    outroCursorDelayMS: level?.outroCursorDelayMS ?? null,
+    poseCursorDelayMS: level?.poseCursorDelayMS ?? null,
+  };
+}
+
+async function fetchGameAndLevels(gameId) {
+  const gameSnapshot = await db.ref(`Games/${gameId}`).get();
+  if (!gameSnapshot.exists()) throw new Error("Game not found.");
+
+  const game = gameSnapshot.val();
+  if (!game.isPublished) throw new Error("Game is not published.");
+
+  const levelIds = game.levelIds ?? [];
+
+  const levelSnapshots = await Promise.all(
+    // NOTE: if your RTDB path is actually "Levels" not "level", change it here.
+    levelIds.map((levelId) => db.ref(`level/${levelId}`).get())
+  );
+
+  const levels = levelSnapshots
+    .map((snapshot, i) => {
+      if (!snapshot.exists()) {
+        console.log(`⚠️ Level ${levelIds[i]} not found`);
+        return null;
+      }
+      const level = snapshot.val();
+      return toPlayableLevel(levelIds[i], level);
+    })
+    .filter(Boolean);
+
+  const { pin, ...safeGame } = game;
+
+  return {
+    game: {
+      id: gameId,
+      name: safeGame.name ?? "",
+      description: safeGame.description ?? "",
+      keywords: safeGame.keywords ?? "",
+      levelIds,
+      storyline: safeGame.storyline ?? [],
+      settings: safeGame.settings ?? {},
+    },
+    levels,
+  };
+}
+
+export default async function Page({ params, searchParams }) {
+  const { id: gameId } = await params;
+  const { level } = await searchParams;
+
+  const { game, levels } = await fetchGameAndLevels(gameId);
+  const levelIndex = level ? Number(level) : 0;
+  
   return (
-    <GamePlayer
-      gameData={gameData}
-      settings={playerSettings}
-      sessionId={null}
-      onComplete={() => setCompleted(true)}
+    <GamePlayerClient
+      game={game}
+      levels={levels}
+      levelIndex={Number.isFinite(levelIndex) ? levelIndex : 0}
     />
   );
 }
