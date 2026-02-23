@@ -228,12 +228,14 @@ export default function LevelEditPage() {
         description="Full-width editor for adding/removing poses and managing the pose map."
       >
         <div className="min-h-[560px]">
-          <LevelPosesEditor
-            poses={safeLevel.poses || {}}
-            disabled={savingLevel}
-            onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
-            onRemovePose={removePose}
-          />
+         <LevelPosesEditor
+          poses={safeLevel.poses || {}}
+          disabled={savingLevel}
+          onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
+          onRemovePose={removePose}
+          poseTolerancePctById={safeLevel.poseTolerancePctById || {}}
+          onPoseToleranceUpdate={(map) => setLevel((prev) => ({ ...prev, poseTolerancePctById: map }))}
+        />
         </div>
       </SectionCard>
 
