@@ -4,59 +4,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import levelEditor from "../domain/levels/levelEditor";
 
-const isPlainObject = (v) =>
-  !!v && typeof v === "object" && !Array.isArray(v);
-
-const clamp = (n, min, max) => {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return min;
-  return Math.max(min, Math.min(max, x));
-};
-
-const normalizeTFEnabled = (v) => v === true || v === "true";
-const normalizeTFAnswer = (v) => {
-  if (v === true || v === "true") return true;
-  if (v === false || v === "false") return false;
-  return null;
-};
-
-const normalizePoseToleranceMap = (v) => {
-  if (!isPlainObject(v)) return {};
-  const out = {};
-  for (const [k, val] of Object.entries(v)) {
-    // keep only string-ish keys
-    const key = String(k);
-    out[key] = clamp(val, 0, 100);
-  }
-  return out;
-};
-
-// Removes UI-only keys and ensures shape is safe to send
-const buildSavePayload = (level, publish) => {
-  const draft = { ...(level ?? {}) };
-
-  // UI-only / server-only fields you don’t want to persist from the editor
-  delete draft.id;
-  delete draft.pinDirty;
-  delete draft.hasPin;
-  delete draft.preview;
-
-  // normalize arrays/objects
-  if (!Array.isArray(draft.options)) draft.options = [];
-  if (!Array.isArray(draft.answers)) draft.answers = [];
-  if (!isPlainObject(draft.poses)) draft.poses = {};
-
-  // new fields (robust normalization)
-  draft.trueFalseEnabled = normalizeTFEnabled(draft.trueFalseEnabled);
-  draft.trueFalseAnswer = normalizeTFAnswer(draft.trueFalseAnswer);
-  draft.poseTolerancePctById = normalizePoseToleranceMap(draft.poseTolerancePctById);
-
-  // final publish flag
-  draft.isPublished = !!publish;
-
-  return draft;
-};
-
 export const useLevelEditor = (levelId, isNew = false, userEmail) => {
   const router = useRouter();
 
@@ -66,7 +13,7 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
   const [savingLevel, setSavingLevel] = useState(false);
   const [message, setMessage] = useState("");
 
-  // ✅ prevent double prompts in dev StrictMode
+  // prevent double prompts in dev StrictMode
   const loadInFlightRef = useRef(false);
 
   /* ------------------ PIN STORAGE ------------------ */
@@ -112,15 +59,8 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
           options: [],
           answers: [],
           isPublished: false,
-
-          // PIN support
           pin: "",
           pinDirty: false,
-
-          // ✅ new fields defaults
-          trueFalseEnabled: false,
-          trueFalseAnswer: null,
-          poseTolerancePctById: {},
         });
         return;
       }
@@ -140,9 +80,7 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
             setLevel({
               ...res.level,
               id: levelId,
-              // keep visible pin from storage only
               pin: storedPin,
-              // not dirty unless user edits in UI
               pinDirty: false,
             });
             return;
@@ -219,6 +157,7 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
 
       const stillStored = getStoredPin(levelId);
 
+      // IMPORTANT: keep pin undefined if no stored pin (avoid accidental overwrite)
       setLevel({
         ...response.level,
         id: levelId,
@@ -247,7 +186,6 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
   const handleSave = useCallback(
     async (publish = false) => {
       if (!level) return;
-
       setSavingLevel(true);
       setMessage("");
 
@@ -255,63 +193,61 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
         let response;
 
         if (isNew) {
-          // NEW levels: include pin + new fields
-          const payload = buildSavePayload(level, publish);
-
-          response = await levelEditor.create(payload);
+          // for NEW levels, sending pin is fine
+          const { id, pinDirty, ...draft } = level;
+          response = await levelEditor.create({ ...draft, isPublished: publish });
 
           if (response?.success && response?.id) {
             const newId = response.id;
 
-            const desiredPin = (payload.pin || "").trim();
+            const desiredPin = (draft.pin || "").trim();
             if (desiredPin) setStoredPin(newId, desiredPin);
             else clearStoredPin(newId);
 
+            // Editor route is /level/[id]
             router.replace(`/level/${newId}`);
             return;
           }
+        } else {
+          if (!levelId) throw new Error("Missing levelId for save");
 
-          if (!response?.success) throw new Error("Create failed");
+          // Authenticate using stored pin (old pin), even if changing/removing
+          const authPin = getStoredPin(levelId);
+          const opts = authPin ? { pin: authPin } : undefined;
+
+          // Only send `pin` if user changed it (pinDirty === true)
+          const { id, pinDirty, ...draft } = level;
+          const payload = { ...draft, isPublished: publish };
+
+          if (!pinDirty) {
+            delete payload.pin;
+          } else {
+            payload.pin = (draft.pin ?? "").toString();
+          }
+
+          response = await levelEditor.save(levelId, payload, opts);
+          if (!response?.success) throw new Error("Save failed");
+
+          if (pinDirty) {
+            const desiredPin = (payload.pin || "").trim();
+            if (desiredPin) setStoredPin(levelId, desiredPin);
+            else clearStoredPin(levelId);
+          }
+
+          const stillStored = getStoredPin(levelId);
+
+          setLevel({
+            ...response.level,
+            id: levelId,
+            pin: stillStored || undefined,
+            pinDirty: false,
+          });
+
+          alert(publish ? "Level published!" : "Draft saved!");
           return;
         }
 
-        // Existing level
-        if (!levelId) throw new Error("Missing levelId for save");
-
-        // Authenticate using stored pin (old pin), even if changing/removing
-        const authPin = getStoredPin(levelId);
-        const opts = authPin ? { pin: authPin } : undefined;
-
-        const payload = buildSavePayload(level, publish);
-
-        // ✅ critical pin rule:
-        // only send pin if user actually changed it
-        if (!level.pinDirty) {
-          delete payload.pin;
-        } else {
-          payload.pin = (level.pin ?? "").toString();
-        }
-
-        response = await levelEditor.save(levelId, payload, opts);
         if (!response?.success) throw new Error("Save failed");
-
-        // After success, mirror draft pin to storage ONLY if user changed it
-        if (level.pinDirty) {
-          const desiredPin = (payload.pin || "").trim();
-          if (desiredPin) setStoredPin(levelId, desiredPin);
-          else clearStoredPin(levelId);
-        }
-
-        const stillStored = getStoredPin(levelId);
-
-        setLevel({
-          ...response.level,
-          id: levelId,
-          pin: stillStored || undefined,
-          pinDirty: false,
-        });
-
-        alert(publish ? "Level published!" : "Draft saved!");
       } catch (err) {
         console.error("Error saving level:", err);
         setMessage("Error saving level");
@@ -345,28 +281,18 @@ export const useLevelEditor = (levelId, isNew = false, userEmail) => {
 
   /* ------------------ HELPERS ------------------ */
   const addPose = (key, value) => {
-    setLevel((prev) => ({
-      ...prev,
-      poses: { ...(prev?.poses || {}), [key]: value },
-    }));
+    setLevel((prev) => ({ ...prev, poses: { ...(prev?.poses || {}), [key]: value } }));
   };
 
   const updatePose = (key, value) => {
-    setLevel((prev) => ({
-      ...prev,
-      poses: { ...(prev?.poses || {}), [key]: value },
-    }));
+    setLevel((prev) => ({ ...prev, poses: { ...(prev?.poses || {}), [key]: value } }));
   };
 
   const removePose = (key) => {
     setLevel((prev) => {
       const newPoses = { ...(prev?.poses || {}) };
       delete newPoses[key];
-
-      const newTol = { ...(prev?.poseTolerancePctById || {}) };
-      delete newTol[key];
-
-      return { ...prev, poses: newPoses, poseTolerancePctById: newTol };
+      return { ...prev, poses: newPoses };
     });
   };
 
