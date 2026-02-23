@@ -1,40 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { useAuth } from "@/lib/contexts/AuthContext";
-import { Plus, Trash2 } from "lucide-react";
+import { Check, X } from "lucide-react";
 
+import { useAuth } from "@/lib/contexts/AuthContext";
 import { useLevelEditor } from "@/lib/hooks/useLevelEditor";
 
+import EditorHeader from "@/components/editor/EditorHeader";
+import SectionCard from "@/components/editor/SectionCard";
+import FormField from "@/components/editor/FormField";
+
 import LevelBasicsForm from "@/components/level/LevelBasicsForm";
+import LevelOptionsEditor from "@/components/level/LevelOptionsEditor";
 import LevelPosesEditor from "@/components/level/LevelPosesEditor";
-
-function asArray(v) {
-  return Array.isArray(v) ? v : [];
-}
-function asObject(v) {
-  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-}
-
-/** super simple toggle row */
-function ToggleRow({ label, value, onChange, disabled, helper }) {
-  return (
-    <label className="flex items-start justify-between gap-4 py-2">
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-gray-900">{label}</div>
-        {helper ? <div className="text-xs text-gray-600">{helper}</div> : null}
-      </div>
-      <input
-        type="checkbox"
-        checked={!!value}
-        onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
-        className="mt-1 h-4 w-4"
-      />
-    </label>
-  );
-}
 
 export default function LevelEditPage() {
   const params = useParams();
@@ -55,209 +34,229 @@ export default function LevelEditPage() {
     handleSave,
     handleDelete,
     handleBack,
+    getStoredPin,
   } = useLevelEditor(levelId, false, user?.email);
 
-  const safeLevel = level ?? {};
-  const poses = useMemo(() => asObject(safeLevel.poses), [safeLevel.poses]);
-  const options = useMemo(() => asArray(safeLevel.options), [safeLevel.options]);
-  const answers = useMemo(() => asArray(safeLevel.answers), [safeLevel.answers]);
-  const poseTolerancePctById = useMemo(
-    () => asObject(safeLevel.poseTolerancePctById),
-    [safeLevel.poseTolerancePctById]
-  );
+  const safeLevel = useMemo(() => level ?? {}, [level]);
 
-  const patchLevel = (patch) => {
-    setLevel((prev) => ({ ...(prev ?? {}), ...(patch ?? {}) }));
+  const [editingPin, setEditingPin] = useState(false);
+  const [pinValue, setPinValue] = useState("");
+  const pinRef = useRef(null);
+
+  // suppress sessionStorage PIN being re-displayed after local remove
+  const [ignoreStoredPin, setIgnoreStoredPin] = useState(false);
+
+  /* ------------------ PIN SYNC (don’t overwrite while typing) ------------------ */
+  useEffect(() => {
+    if (!level) return;
+    if (editingPin) return;
+
+    if (ignoreStoredPin) {
+      setPinValue((level.pin ?? "") || "");
+      return;
+    }
+
+    const sessionPin = getStoredPin?.() || "";
+    const localPin = level.pin ?? "";
+    setPinValue(localPin || sessionPin || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level?.pin, levelId, editingPin, ignoreStoredPin]);
+
+  useEffect(() => {
+    if (!level) return;
+    if (((level.pin ?? "") || "").trim()) setIgnoreStoredPin(false);
+  }, [level]);
+
+  const storedPin = !ignoreStoredPin ? (getStoredPin?.() || "") : "";
+
+  const hasPin =
+    Boolean(((level?.pin ?? "") || "").trim()) ||
+    Boolean(level?.hasPin) ||
+    Boolean((storedPin || "").trim());
+
+  const handleRemovePin = () => {
+    setLevel((prev) => ({ ...prev, pin: "", pinDirty: true }));
+    setPinValue("");
+    setEditingPin(false);
+    setIgnoreStoredPin(true);
   };
 
   if (loadingLevel) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg text-gray-900">Loading level...</div>
+        <div className="text-lg">Loading level...</div>
       </div>
     );
   }
 
   if (!level) return null;
 
-  // ✅ Force readable inputs even under aggressive parent styling
-  const optionInputClass =
-    "border border-gray-300 p-2 flex-1 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 " +
-    "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 " +
-    "disabled:bg-gray-100 disabled:text-gray-700 disabled:cursor-not-allowed " +
-    "!text-gray-900";
-
   return (
-    <div className="max-w-6xl mx-auto p-4 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Edit Level</h1>
+    <div className="max-w-6xl mx-auto p-4">
+      <EditorHeader title="Edit Level" subtitle={`Level ID: ${levelId}`} onBack={handleBack} />
 
       {message && (
-        <div className="bg-blue-600 text-white px-4 py-2 rounded">
-          {message}
-        </div>
+        <div className="bg-blue-600 text-white px-4 py-2 rounded mb-4">{message}</div>
       )}
 
-      {/* BASICS */}
-      <div className="border rounded-xl p-4 bg-white">
-        <div className="text-sm font-semibold mb-3 text-gray-900">Basics</div>
-        <LevelBasicsForm
-          level={safeLevel}
-          disabled={savingLevel}
-          onChange={(patch) => patchLevel(patch)}
-          errors={{}}
-        />
-      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 space-y-4">
+          <SectionCard title="Basics">
+            <LevelBasicsForm
+              level={safeLevel}
+              disabled={savingLevel}
+              onChange={(patch) => setLevel((prev) => ({ ...prev, ...patch }))}
+            />
+          </SectionCard>
 
-      {/* SETTINGS */}
-      <div className="border rounded-xl p-4 bg-white">
-        <div className="text-sm font-semibold mb-1 text-gray-900">Level Settings</div>
-        <div className="text-xs text-gray-600 mb-3">
-          Placeholder toggles (save with the level; wire them into gameplay later).
-        </div>
-
-        <div className="divide-y">
-          <ToggleRow
-            label="Shuffle options"
-            helper="Randomize multiple-choice option order."
-            value={safeLevel.shuffleOptions}
-            disabled={savingLevel}
-            onChange={(v) => patchLevel({ shuffleOptions: v })}
-          />
-
-          <ToggleRow
-            label="Show hints"
-            helper="Enable hint UI for this level."
-            value={safeLevel.showHints}
-            disabled={savingLevel}
-            onChange={(v) => patchLevel({ showHints: v })}
-          />
-
-          <ToggleRow
-            label="Allow skip"
-            helper="Let players skip this level."
-            value={safeLevel.allowSkip}
-            disabled={savingLevel}
-            onChange={(v) => patchLevel({ allowSkip: v })}
-          />
-
-          <ToggleRow
-            label="Timed level"
-            helper="Enable a timer (duration can be added later)."
-            value={safeLevel.timedEnabled}
-            disabled={savingLevel}
-            onChange={(v) => patchLevel({ timedEnabled: v })}
-          />
-        </div>
-      </div>
-
-      {/* POSES */}
-      <div className="border rounded-xl p-4 bg-white">
-       <LevelPosesEditor
-        poses={poses}
-        poseTolerancePctById={poseTolerancePctById}
-        disabled={savingLevel}
-        onPosesUpdate={(nextPoses) => patchLevel({ poses: nextPoses })}
-        onPoseToleranceUpdate={(nextMap) => patchLevel({ poseTolerancePctById: nextMap })}
-        onRemovePose={(poseId) => removePose?.(poseId)}
-      />
-      </div>
-
-      {/* OPTIONS & ANSWERS */}
-      <div className="border rounded-xl p-4 bg-white">
-        <div className="text-sm font-semibold mb-3 text-gray-900">Options & Answers</div>
-
-        {options.length > 0 ? (
-          <div className="space-y-2 mb-3">
-            {options.map((opt, i) => (
-              <div key={i} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-700 w-8">{i + 1}.</span>
-
-                <input
-                  value={opt ?? ""}
-                  onChange={(e) => updateOption(i, e.target.value)}
-                  placeholder={`Option ${i + 1}`}
-                  className={optionInputClass}
+          <SectionCard
+            title="PIN Protection"
+            description="After changing/removing the PIN, click Save Draft or Publish to apply it."
+          >
+            {editingPin ? (
+              <div className="flex gap-2">
+                <FormField
+                  id="level-pin"
+                  type="text"
+                  value={pinValue}
+                  onChange={(e) => setPinValue(e.target.value)}
+                  placeholder="Enter PIN (min 4 characters)"
                   disabled={savingLevel}
+                  className="flex-1"
+                  inputRef={pinRef}
                 />
-
-                <label className="flex items-center gap-2 cursor-pointer whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={answers.includes(i)}
-                    onChange={() => toggleAnswer(i)}
-                    className="h-4 w-4"
-                    disabled={savingLevel}
-                  />
-                  <span className="text-sm text-gray-900">Correct</span>
-                </label>
 
                 <button
                   type="button"
-                  onClick={() => removeOption(i)}
-                  className="bg-red-600 text-white px-2 py-2 rounded hover:bg-red-700 disabled:opacity-50"
+                  onClick={() => {
+                    setLevel((prev) => ({ ...prev, pin: pinValue, pinDirty: true }));
+                    if ((pinValue || "").trim()) setIgnoreStoredPin(false);
+                    else setIgnoreStoredPin(true);
+                    setEditingPin(false);
+                  }}
                   disabled={savingLevel}
-                  title="Remove option"
+                  className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 disabled:opacity-50"
+                  title="Apply (draft)"
                 >
-                  <Trash2 size={14} />
+                  <Check size={16} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sessionPin2 = !ignoreStoredPin ? getStoredPin?.() || "" : "";
+                    const localPin = level.pin ?? "";
+                    setPinValue(localPin || sessionPin2 || "");
+                    setEditingPin(false);
+                  }}
+                  disabled={savingLevel}
+                  className="bg-gray-400 text-white px-3 py-2 rounded hover:bg-gray-500 disabled:opacity-50"
+                  title="Cancel"
+                >
+                  <X size={16} />
                 </button>
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-gray-600 text-sm mb-3">No options added yet</p>
-        )}
+            ) : (
+              <div className="flex gap-2 items-center">
+                {pinValue ? (
+                  <span className="font-mono text-sm bg-gray-100 border px-3 py-2 rounded text-gray-800">
+                    {pinValue}
+                  </span>
+                ) : hasPin ? (
+                  <span className="text-sm text-gray-400 italic px-3 py-2">
+                    PIN set (not returned by server)
+                  </span>
+                ) : (
+                  <span className="text-sm text-gray-400 px-3 py-2">No PIN set</span>
+                )}
 
-        <button
-          type="button"
-          onClick={addOption}
-          disabled={savingLevel}
-          className="bg-blue-600 text-white px-3 py-2 rounded flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
-        >
-          <Plus size={14} />
-          Add Option
-        </button>
-      </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIgnoreStoredPin(false);
+                    const sessionPin2 = getStoredPin?.() || "";
+                    const localPin = level.pin ?? "";
+                    setPinValue(localPin || sessionPin2 || "");
+                    setEditingPin(true);
+                    setTimeout(() => pinRef.current?.focus(), 0);
+                  }}
+                  disabled={savingLevel}
+                  className="border px-3 py-2 rounded hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {hasPin ? "🔒 Change PIN" : "🔓 Set PIN"}
+                </button>
 
-      {/* ACTIONS */}
-      <div className="flex gap-3 flex-wrap items-center">
-        <button
-          type="button"
-          disabled={savingLevel}
-          onClick={() => handleSave(false)}
-          className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {savingLevel ? "Saving..." : "Save Draft"}
-        </button>
+                {hasPin && (
+                  <button
+                    type="button"
+                    onClick={handleRemovePin}
+                    disabled={savingLevel}
+                    className="text-red-600 hover:text-red-700 px-3 py-2 disabled:opacity-50"
+                  >
+                    Remove PIN
+                  </button>
+                )}
+              </div>
+            )}
+          </SectionCard>
 
-        <button
-          type="button"
-          disabled={savingLevel}
-          onClick={() => handleSave(true)}
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {savingLevel ? "Publishing..." : "Publish"}
-        </button>
+          <SectionCard title="Options & Answers">
+            <LevelOptionsEditor
+              options={safeLevel.options || []}
+              answers={safeLevel.answers || []}
+              onAddOption={addOption}
+              onUpdateOption={updateOption}
+              onRemoveOption={removeOption}
+              onToggleAnswer={toggleAnswer}
+              disabled={savingLevel}
+            />
+          </SectionCard>
+        </div>
 
-        <button
-          type="button"
-          disabled={savingLevel}
-          onClick={handleDelete}
-          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Delete
-        </button>
+        <div className="space-y-4">
+          <SectionCard title="Poses">
+            <LevelPosesEditor
+              poses={safeLevel.poses || {}}
+              disabled={savingLevel}
+              onPosesUpdate={(poses) => setLevel((prev) => ({ ...prev, poses }))}
+              onRemovePose={removePose}
+            />
+          </SectionCard>
 
-        <button
-          type="button"
-          onClick={handleBack}
-          className="border px-4 py-2 rounded hover:bg-gray-50 text-gray-900"
-          disabled={savingLevel}
-        >
-          Back
-        </button>
+          <SectionCard title="Actions">
+            <div className="space-y-3">
+              <button
+                type="button"
+                disabled={savingLevel}
+                onClick={() => handleSave(false)}
+                className="w-full bg-gray-900 text-white px-4 py-2 rounded hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingLevel ? "Saving..." : "Save Draft"}
+              </button>
 
-        <div className="ml-auto text-sm text-gray-700">
-          Status: {safeLevel.isPublished ? "✅ Published" : "📝 Draft"}
+              <button
+                type="button"
+                disabled={savingLevel}
+                onClick={() => handleSave(true)}
+                className="w-full bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingLevel ? "Publishing..." : "Publish"}
+              </button>
+
+              <button
+                type="button"
+                disabled={savingLevel}
+                onClick={handleDelete}
+                className="w-full bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Delete
+              </button>
+
+              <div className="text-sm text-gray-600">
+                Status: {safeLevel.isPublished ? "✅ Published" : "📝 Draft"}
+              </div>
+            </div>
+          </SectionCard>
         </div>
       </div>
     </div>
