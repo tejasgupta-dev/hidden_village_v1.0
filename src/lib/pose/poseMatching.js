@@ -1,7 +1,8 @@
 // src/lib/pose/poseMatching.js
 // Angle-based pose similarity engine.
 // Works with poseLandmarks, leftHandLandmarks, rightHandLandmarks, faceLandmarks.
-// You can define any "body part" by defining angle features based on landmark indices.
+
+import { enrichLandmarks } from "@/lib/pose/landmark";
 
 const DEG = 180 / Math.PI;
 
@@ -35,7 +36,6 @@ function getPoint(poseObj, dataKey, index) {
 }
 
 function vec(a, b) {
-  // vector from a -> b
   return { x: b.x - a.x, y: b.y - a.y, z: (b.z ?? 0) - (a.z ?? 0) };
 }
 
@@ -52,23 +52,15 @@ function angleBetweenVectors(u, v) {
   const mv = mag(v);
   if (!Number.isFinite(mu) || !Number.isFinite(mv) || mu <= 1e-9 || mv <= 1e-9) return null;
   const c = clamp(dot(u, v) / (mu * mv), -1, 1);
-  return Math.acos(c) * DEG; // 0..180
+  return Math.acos(c) * DEG;
 }
 
-/**
- * Angle at B in triangle A-B-C (between BA and BC).
- * returns degrees 0..180
- */
 function angleABC(a, b, c) {
-  const u = vec(b, a); // B->A
-  const v = vec(b, c); // B->C
+  const u = vec(b, a);
+  const v = vec(b, c);
   return angleBetweenVectors(u, v);
 }
 
-/**
- * Angle between line A->B and line C->D.
- * returns degrees 0..180
- */
 function angleLineToLine(a, b, c, d) {
   const u = vec(a, b);
   const v = vec(c, d);
@@ -77,60 +69,17 @@ function angleLineToLine(a, b, c, d) {
 
 /* -------------------------- feature definitions -------------------------- */
 
-export function createABCFeature({
-  id,
-  label,
-  dataKey,
-  A,
-  B,
-  C,
-  weight = 1,
-  maxDiffDeg = 45,
-}) {
-  return {
-    id,
-    label: label ?? id,
-    type: "ABC",
-    dataKey,
-    points: [A, B, C],
-    weight,
-    maxDiffDeg,
-  };
+export function createABCFeature({ id, label, dataKey, A, B, C, weight = 1, maxDiffDeg = 45 }) {
+  return { id, label: label ?? id, type: "ABC", dataKey, points: [A, B, C], weight, maxDiffDeg };
 }
 
-export function createLineLineFeature({
-  id,
-  label,
-  dataKey,
-  A,
-  B,
-  C,
-  D,
-  weight = 1,
-  maxDiffDeg = 45,
-}) {
-  return {
-    id,
-    label: label ?? id,
-    type: "LINE_LINE",
-    dataKey,
-    points: [A, B, C, D],
-    weight,
-    maxDiffDeg,
-  };
+export function createLineLineFeature({ id, label, dataKey, A, B, C, D, weight = 1, maxDiffDeg = 45 }) {
+  return { id, label: label ?? id, type: "LINE_LINE", dataKey, points: [A, B, C, D], weight, maxDiffDeg };
 }
 
 /* -------------------------- registry helpers -------------------------- */
 
 function addHandFingerFeatures(R, side /* "LH"|"RH" */, dataKey) {
-  // Hand indices (MediaPipe):
-  // wrist=0
-  // thumb: 1-4 (CMC, MCP, IP, TIP)
-  // index: 5-8 (MCP, PIP, DIP, TIP)
-  // middle: 9-12
-  // ring: 13-16
-  // pinky: 17-20
-
   const sideName = side === "LH" ? "Left" : "Right";
 
   const mk = (id, label, A, B, C) =>
@@ -169,10 +118,10 @@ function addHandFingerFeatures(R, side /* "LH"|"RH" */, dataKey) {
   R[`${side}_PINKY_PIP`] = mk("PINKY_PIP", "pinky PIP (MCP-PIP-DIP)", 17, 18, 19);
   R[`${side}_PINKY_DIP`] = mk("PINKY_DIP", "pinky DIP (PIP-DIP-TIP)", 18, 19, 20);
 
-  // Spread angles (line-to-line): wrist->MCP vs wrist->MCP
+  // Spreads
   R[`${side}_INDEX_MIDDLE_SPREAD`] = createLineLineFeature({
     id: `${side}_INDEX_MIDDLE_SPREAD`,
-    label: `${sideName} index-middle spread (wrist-indexMCP vs wrist-middleMCP)`,
+    label: `${sideName} index-middle spread`,
     dataKey,
     A: 0,
     B: 5,
@@ -183,7 +132,7 @@ function addHandFingerFeatures(R, side /* "LH"|"RH" */, dataKey) {
 
   R[`${side}_MIDDLE_RING_SPREAD`] = createLineLineFeature({
     id: `${side}_MIDDLE_RING_SPREAD`,
-    label: `${sideName} middle-ring spread (wrist-middleMCP vs wrist-ringMCP)`,
+    label: `${sideName} middle-ring spread`,
     dataKey,
     A: 0,
     B: 9,
@@ -194,7 +143,7 @@ function addHandFingerFeatures(R, side /* "LH"|"RH" */, dataKey) {
 
   R[`${side}_RING_PINKY_SPREAD`] = createLineLineFeature({
     id: `${side}_RING_PINKY_SPREAD`,
-    label: `${sideName} ring-pinky spread (wrist-ringMCP vs wrist-pinkyMCP)`,
+    label: `${sideName} ring-pinky spread`,
     dataKey,
     A: 0,
     B: 13,
@@ -204,17 +153,70 @@ function addHandFingerFeatures(R, side /* "LH"|"RH" */, dataKey) {
   });
 }
 
+function addFaceMeshFeatures(R) {
+  // Common FaceMesh indices:
+  // 1 nose tip, 33 left eye outer, 263 right eye outer,
+  // 61 left mouth, 291 right mouth, 152 chin, 10 forehead-ish
+  const dataKey = "faceLandmarks";
+
+  R.FACE_EYES_NOSE = createABCFeature({
+    id: "FACE_EYES_NOSE",
+    label: "Face: eye corners around nose (L eye - nose - R eye)",
+    dataKey,
+    A: 33,
+    B: 1,
+    C: 263,
+    maxDiffDeg: 20,
+  });
+
+  R.FACE_MOUTH_NOSE = createABCFeature({
+    id: "FACE_MOUTH_NOSE",
+    label: "Face: mouth corners around nose (L mouth - nose - R mouth)",
+    dataKey,
+    A: 61,
+    B: 1,
+    C: 291,
+    maxDiffDeg: 20,
+  });
+
+  R.FACE_MOUTH_CHIN = createABCFeature({
+    id: "FACE_MOUTH_CHIN",
+    label: "Face: mouth corners around chin (L mouth - chin - R mouth)",
+    dataKey,
+    A: 61,
+    B: 152,
+    C: 291,
+    maxDiffDeg: 20,
+  });
+
+  R.FACE_NOSE_CHIN_FOREHEAD = createABCFeature({
+    id: "FACE_NOSE_CHIN_FOREHEAD",
+    label: "Face: nose-chin-forehead angle (nose - chin - forehead)",
+    dataKey,
+    A: 1,
+    B: 152,
+    C: 10,
+    maxDiffDeg: 25,
+  });
+
+  R.FACE_EYE_LINE_TO_MOUTH_LINE = createLineLineFeature({
+    id: "FACE_EYE_LINE_TO_MOUTH_LINE",
+    label: "Face: eye-line vs mouth-line",
+    dataKey,
+    A: 33,
+    B: 263,
+    C: 61,
+    D: 291,
+    maxDiffDeg: 15,
+  });
+}
+
 /* -------------------------- default registry -------------------------- */
 
 export const FEATURE_REGISTRY = (() => {
   const R = {};
 
-  // Pose indices (MediaPipe Pose):
-  // 11 left shoulder, 13 left elbow, 15 left wrist
-  // 12 right shoulder, 14 right elbow, 16 right wrist
-  // 23 left hip, 25 left knee, 27 left ankle
-  // 24 right hip, 26 right knee, 28 right ankle
-
+  // Pose features
   R.POSE_LEFT_ELBOW = createABCFeature({
     id: "POSE_LEFT_ELBOW",
     label: "Left elbow (shoulder-elbow-wrist)",
@@ -317,12 +319,57 @@ export const FEATURE_REGISTRY = (() => {
     maxDiffDeg: 35,
   });
 
-  // Hands (all fingers + spreads)
+  // FaceMesh features
+  addFaceMeshFeatures(R);
+
+  // Hands
   addHandFingerFeatures(R, "LH", "leftHandLandmarks");
   addHandFingerFeatures(R, "RH", "rightHandLandmarks");
 
   return R;
 })();
+
+/* ------------------------- include -> allowlist ------------------------- */
+/**
+ * include shape: { face,leftArm,rightArm,leftLeg,rightLeg,hands } booleans
+ * semantics:
+ * - include missing/null => null (use ALL)
+ * - all false            => [] (use NONE)
+ * - some true            => allowlist ids
+ */
+export function buildFeatureAllowListFromInclude(include, registry = FEATURE_REGISTRY) {
+  if (!include || typeof include !== "object") return null;
+
+  const enabled = Object.entries(include)
+    .filter(([, v]) => v === true)
+    .map(([k]) => k);
+
+  if (enabled.length === 0) return [];
+
+  const out = new Set();
+
+  // stable groups (explicit)
+  const addMany = (ids) => ids.forEach((id) => registry[id] && out.add(id));
+
+  if (enabled.includes("face")) {
+    for (const id of Object.keys(registry)) {
+      if (id.startsWith("FACE_")) out.add(id);
+    }
+  }
+
+  if (enabled.includes("hands")) {
+    for (const id of Object.keys(registry)) {
+      if (id.startsWith("LH_") || id.startsWith("RH_")) out.add(id);
+    }
+  }
+
+  if (enabled.includes("leftArm")) addMany(["POSE_LEFT_ELBOW", "POSE_LEFT_SHOULDER", "POSE_LEFT_ARM_BEND"]);
+  if (enabled.includes("rightArm")) addMany(["POSE_RIGHT_ELBOW", "POSE_RIGHT_SHOULDER", "POSE_RIGHT_ARM_BEND"]);
+  if (enabled.includes("leftLeg")) addMany(["POSE_LEFT_HIP", "POSE_LEFT_KNEE"]);
+  if (enabled.includes("rightLeg")) addMany(["POSE_RIGHT_HIP", "POSE_RIGHT_KNEE"]);
+
+  return Array.from(out);
+}
 
 /* ------------------------- feature selection logic ------------------------- */
 
@@ -349,10 +396,13 @@ export function chooseFeatures({
 } = {}) {
   let feats = [];
 
-  if (Array.isArray(featureIds) && featureIds.length) {
-    feats = featureIds.map((id) => registry[id]).filter(Boolean);
+  // semantics:
+  // - featureIds === null  => use ALL
+  // - featureIds === []    => use NONE
+  // - featureIds === [...] => use that allowlist
+  if (Array.isArray(featureIds)) {
+    feats = featureIds.length ? featureIds.map((id) => registry[id]).filter(Boolean) : [];
   } else {
-    // default = ALL features
     feats = Object.values(registry);
   }
 
@@ -419,22 +469,19 @@ export function computePoseMatch({
     };
   }
 
-  const features = chooseFeatures({
-    featureIds,
-    registry,
-    livePose,
-    targetPose,
-    allowDataKeys,
-  });
+  const features = chooseFeatures({ featureIds, registry, livePose, targetPose, allowDataKeys });
 
+  // all-off => similarity 100 (nothing to compare)
   if (!features.length) {
+    const noneSelected = Array.isArray(featureIds) && featureIds.length === 0;
+
     return {
-      overall: 0,
-      matched: false,
+      overall: noneSelected ? 100 : 0,
+      matched: noneSelected ? true : false,
       thresholdPct: th,
       perFeature: [],
       usedFeatureIds: [],
-      debug: { reason: "no_features_available" },
+      debug: { reason: noneSelected ? "no_features_selected" : "no_features_available" },
     };
   }
 
@@ -484,78 +531,48 @@ export function computePoseMatch({
     thresholdPct: th,
     perFeature,
     usedFeatureIds: perFeature.map((p) => p.id),
-    debug: {
-      featuresCount: perFeature.length,
-      allowDataKeys: allowDataKeys ?? null,
-    },
+    debug: { featuresCount: perFeature.length, allowDataKeys: allowDataKeys ?? null },
   };
 }
 
 /* ---------------------- perFeature -> perSegment (for PoseDrawer colors) ---------------------- */
 
-/**
- * Your PoseDrawer colors by "segmentName" values like:
- * RIGHT_BICEP, LEFT_BICEP, RIGHT_FOREARM, LEFT_FOREARM, RIGHT_THIGH, LEFT_THIGH, RIGHT_SHIN, LEFT_SHIN, TORSO, etc.
- *
- * This converts angle features (perFeature) into those segment buckets.
- * Hands are returned too (as HAND_LEFT / HAND_RIGHT), but your PoseDrawer currently passes null segmentName for hands,
- * so they won’t color until you wire segment names into the hand drawing functions.
- */
 export function perFeatureToPerSegment(perFeature = []) {
   const rows = Array.isArray(perFeature) ? perFeature : [];
 
-  // Map feature IDs -> PoseDrawer segment names
-    const featureIdToSegment = (id) => {
-    // Arms
+  const featureIdToSegment = (id) => {
     if (id === "POSE_RIGHT_SHOULDER") return "RIGHT_BICEP";
     if (id === "POSE_LEFT_SHOULDER") return "LEFT_BICEP";
 
     if (id === "POSE_RIGHT_ELBOW" || id === "POSE_RIGHT_ARM_BEND") return "RIGHT_FOREARM";
     if (id === "POSE_LEFT_ELBOW" || id === "POSE_LEFT_ARM_BEND") return "LEFT_FOREARM";
 
-    // Legs
     if (id === "POSE_RIGHT_HIP") return "RIGHT_THIGH";
     if (id === "POSE_LEFT_HIP") return "LEFT_THIGH";
 
     if (id === "POSE_RIGHT_KNEE") return "RIGHT_SHIN";
     if (id === "POSE_LEFT_KNEE") return "LEFT_SHIN";
 
-    // Hands: map LH_/RH_ features to the drawer segment names
-    // Example ids: LH_INDEX_PIP, RH_THUMB_IP, LH_RING_DIP, etc.
     if (id.startsWith("RH_") || id.startsWith("LH_")) {
-        const side = id.startsWith("RH_") ? "RIGHT" : "LEFT";
-        const rest = id.slice(3); // remove "RH_" or "LH_"
+      const side = id.startsWith("RH_") ? "RIGHT" : "LEFT";
+      const rest = id.slice(3);
 
-        // rest examples:
-        // "INDEX_PIP", "INDEX_DIP", "INDEX_MCP", "THUMB_CMC", "THUMB_MCP", "THUMB_IP",
-        // "MIDDLE_PIP", "RING_DIP", "PINKY_MCP",
-        // "INDEX_MIDDLE_SPREAD" etc.
+      if (rest.endsWith("_SPREAD")) return `${side}_PALM`;
 
-        // Spread features: treat as "PALM" (so palm color changes with openness)
-        if (rest.endsWith("_SPREAD")) return `${side}_PALM`;
+      const finger = rest.split("_")[0];
+      if (!finger) return `${side}_PALM`;
 
-        // Thumb naming: drawer uses RIGHT_THUMB / RIGHT_THUMB_* too (we draw both)
-        // Finger-level:
-        const finger = rest.split("_")[0]; // THUMB / INDEX / MIDDLE / RING / PINKY
-        if (!finger) return `${side}_PALM`;
+      const joint = rest.split("_")[1];
+      if (!joint) return `${side}_${finger}`;
 
-        // Joint-level:
-        const joint = rest.split("_")[1]; // MCP / PIP / DIP / IP / CMC
-        if (!joint) return `${side}_${finger}`;
-
-        // Map to both:
-        // - overall finger polyline: RIGHT_INDEX / LEFT_THUMB
-        // - joint segment overlay: RIGHT_INDEX_PIP / LEFT_THUMB_IP, etc.
-        // We'll return the joint segment name so your OPTIONAL overlay gets color.
-        return `${side}_${finger}_${joint}`;
+      return `${side}_${finger}_${joint}`;
     }
 
+    // Face doesn't map to PoseDrawer segments (yet)
     return null;
-    };
+  };
 
-
-  // Weighted averaging per segment
-  const acc = new Map(); // segment -> { num, den }
+  const acc = new Map();
   for (const r of rows) {
     const seg = featureIdToSegment(r?.id);
     if (!seg) continue;
@@ -573,16 +590,92 @@ export function perFeatureToPerSegment(perFeature = []) {
 
   const out = [];
   for (const [segment, { num, den }] of acc.entries()) {
-    out.push({
-      segment,
-      similarityScore: den > 0 ? num / den : 0,
-    });
+    out.push({ segment, similarityScore: den > 0 ? num / den : 0 });
   }
 
   return out;
 }
 
-/* ---------------------- helpers for building settings UI ---------------------- */
+/* ---------------------- FaceMesh gating + one-call frame eval ---------------------- */
+
+function hasFaceLandmarks(poseObj) {
+  const arr = poseObj?.faceLandmarks;
+  return Array.isArray(arr) && arr.length > 0;
+}
+
+/**
+ * Single-frame evaluation that PoseMatchView can call.
+ * PoseMatchView stays UI-only.
+ */
+export function computePoseMatchFrame({
+  liveRaw,
+  targetRaw,
+  include = null,
+  thresholdPct = 70,
+  registry = FEATURE_REGISTRY,
+  allowDataKeys = null,
+  weightsOverride = null,
+} = {}) {
+  const th = clampPct(thresholdPct, 70);
+
+  if (!liveRaw || !targetRaw) {
+    return {
+      blocked: false,
+      blockReason: null,
+      overall: 0,
+      matched: false,
+      thresholdPct: th,
+      perFeature: [],
+      perSegment: [],
+      debug: { reason: "missing_pose" },
+    };
+  }
+
+  // Face required => block if missing (live OR target)
+  const faceRequired = !!include?.face;
+  if (faceRequired) {
+    const liveHas = hasFaceLandmarks(liveRaw);
+    const targetHas = hasFaceLandmarks(targetRaw);
+    if (!liveHas || !targetHas) {
+      return {
+        blocked: true,
+        blockReason: "face_missing",
+        overall: 0,
+        matched: false,
+        thresholdPct: th,
+        perFeature: [],
+        perSegment: [],
+        debug: { reason: "face_missing", liveHasFace: liveHas, targetHasFace: targetHas },
+      };
+    }
+  }
+
+  const featureIds = buildFeatureAllowListFromInclude(include, registry);
+
+  const live = enrichLandmarks(liveRaw);
+  const target = enrichLandmarks(targetRaw);
+
+  const result = computePoseMatch({
+    livePose: live,
+    targetPose: target,
+    featureIds,
+    registry,
+    allowDataKeys,
+    thresholdPct: th,
+    weightsOverride,
+  });
+
+  const perSegment = perFeatureToPerSegment(result.perFeature);
+
+  return {
+    blocked: false,
+    blockReason: null,
+    ...result,
+    perSegment,
+  };
+}
+
+/* ---------------------- helpers for settings UI ---------------------- */
 
 export function listAvailableFeatures(registry = FEATURE_REGISTRY) {
   return Object.values(registry).map((f) => ({

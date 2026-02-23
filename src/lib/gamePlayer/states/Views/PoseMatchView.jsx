@@ -4,9 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import PoseDrawer from "@/lib/pose/poseDrawer";
-import { enrichLandmarks } from "@/lib/pose/landmark";
-import { clampPct } from "@/lib/pose/poseMatching";
-import { computePoseMatch, perFeatureToPerSegment } from "@/lib/pose/poseMatching";
+import { clampPct, computePoseMatchFrame } from "@/lib/pose/poseMatching";
 
 function DefaultSpeakerSprite() {
   return (
@@ -41,11 +39,12 @@ export default function PoseMatchView({
   width = 800,
   height = 600,
 }) {
-  const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 5000));
+  const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 2000));
 
-  const level = useMemo(() => {
-    return session?.game?.levels?.[session?.levelIndex] ?? null;
-  }, [session?.game, session?.levelIndex]);
+  const level = useMemo(
+    () => session?.game?.levels?.[session?.levelIndex] ?? null,
+    [session?.game, session?.levelIndex]
+  );
 
   const poseMap = useMemo(() => {
     const poses = level?.poses ?? null;
@@ -65,14 +64,6 @@ export default function PoseMatchView({
     return safeParsePose(poseMap[targetPoseId]);
   }, [poseMap, targetPoseId]);
 
-  /**
-   * tolerance priority (0..100):
-   * 1) node.poseTolerances[stepIndex]
-   * 2) level.poseTolerancePctById[targetPoseId]
-   * 3) node.defaultTolerance || node.threshold
-   * 4) pose json tolerance fields (LAST)
-   * 5) fallback 70
-   */
   const thresholdPct = useMemo(() => {
     const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
     const fromArray =
@@ -114,16 +105,26 @@ export default function PoseMatchView({
   }, [session.nodeIndex, stepIndex, targetPoseId]);
 
   useEffect(() => {
-    const t = setInterval(() => {
-      setHoldElapsed(nowMS() - stepStartRef.current);
-    }, 100);
+    const t = setInterval(() => setHoldElapsed(nowMS() - stepStartRef.current), 100);
     return () => clearInterval(t);
   }, []);
 
   const holdRemaining = Math.max(0, minHoldMS - holdElapsed);
   const holdDone = holdElapsed >= minHoldMS;
 
-  /* ----------------------------- similarity compute ----------------------------- */
+  /* ----------------------------- compute + dispatch ----------------------------- */
+
+  const includeMask = session?.settings?.include ?? null;
+
+  const pausedForBlockRef = useRef(false);
+  const [blocked, setBlocked] = useState(false);
+  const [blockReason, setBlockReason] = useState(null);
+
+  useEffect(() => {
+    pausedForBlockRef.current = false;
+    setBlocked(false);
+    setBlockReason(null);
+  }, [session.nodeIndex, stepIndex, targetPoseId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,41 +138,44 @@ export default function PoseMatchView({
         dispatch({
           type: "COMMAND",
           name: "POSE_MATCH_SCORES",
-          payload: {
-            overall: 0,
-            perSegment: [],
-            thresholdPct,
-            targetPoseId,
-            stepIndex,
-          },
+          payload: { overall: 0, perSegment: [], thresholdPct, targetPoseId, stepIndex },
         });
         return;
       }
 
-      // NOTE: keep enrich so your downstream coordinate assumptions remain stable
-      const enrichedLive = enrichLandmarks(live);
-      const enrichedTarget = enrichLandmarks(targetPose);
-
-      // ✅ new engine: uses all available features across pose + hands on BOTH live+target
-      const result = computePoseMatch({
-        livePose: enrichedLive,
-        targetPose: enrichedTarget,
+      const r = computePoseMatchFrame({
+        liveRaw: live,
+        targetRaw: targetPose,
+        include: includeMask,
         thresholdPct,
-        featureIds: null, // use everything available (you'll add settings later)
       });
 
-      // ✅ bridge: compute segment scores for PoseDrawer coloring
-      const perSegment = perFeatureToPerSegment(result.perFeature);
+      setBlocked(!!r.blocked);
+      setBlockReason(r.blockReason ?? null);
+
+      if (r.blocked) {
+        // You requested: pause and user can quit later
+        if (!pausedForBlockRef.current) {
+          pausedForBlockRef.current = true;
+          dispatch(commands.pause());
+        }
+
+        dispatch({
+          type: "COMMAND",
+          name: "POSE_MATCH_SCORES",
+          payload: { overall: 0, perSegment: [], thresholdPct, targetPoseId, stepIndex },
+        });
+        return;
+      }
 
       dispatch({
         type: "COMMAND",
         name: "POSE_MATCH_SCORES",
         payload: {
-          overall: result.overall,
-          perSegment,
-          // keep optional debug for later settings UI
-          perFeature: result.perFeature,
-          thresholdPct: result.thresholdPct,
+          overall: r.overall,
+          perSegment: r.perSegment,
+          perFeature: r.perFeature,
+          thresholdPct: r.thresholdPct,
           targetPoseId,
           stepIndex,
         },
@@ -182,7 +186,7 @@ export default function PoseMatchView({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex]);
+  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex, includeMask]);
 
   /* ----------------------------- reducer truth ----------------------------- */
 
@@ -190,19 +194,22 @@ export default function PoseMatchView({
   const matched = !!session.poseMatch?.matched;
   const effectiveThreshold = Number(session.poseMatch?.thresholdPct ?? thresholdPct);
 
-  // ✅ this is what drives the colors now
   const drawerScores = Array.isArray(session.poseMatch?.perSegment)
     ? session.poseMatch.perSegment
     : [];
+
+  const reps = Number(session?.settings?.reps?.poseMatch ?? 1);
+  const roundIndex = Number(session?.poseMatchRoundIndex ?? 0);
 
   /* ----------------------------- advancing ----------------------------- */
 
   const didAutoAdvanceRef = useRef(false);
   useEffect(() => {
     didAutoAdvanceRef.current = false;
-  }, [session.nodeIndex, stepIndex, targetPoseId]);
+  }, [session.nodeIndex, stepIndex, targetPoseId, roundIndex]);
 
   useEffect(() => {
+    if (blocked) return;
     if (!targetPoseId) return;
     if (!holdDone) return;
     if (!matched) return;
@@ -211,9 +218,10 @@ export default function PoseMatchView({
     didAutoAdvanceRef.current = true;
 
     dispatch(commands.next({ source: "auto" }));
-  }, [targetPoseId, holdDone, matched, dispatch]);
+  }, [blocked, targetPoseId, holdDone, matched, dispatch]);
 
   const onNext = () => {
+    if (blocked) return;
     if (!holdDone) return;
     dispatch(commands.next({ source: "click" }));
   };
@@ -229,7 +237,6 @@ export default function PoseMatchView({
               poseData={targetPose}
               width={Math.min(520, Math.floor(width * 0.55))}
               height={Math.min(700, Math.floor(height * 0.85))}
-              // ✅ pass real scores so it can color segments
               similarityScores={drawerScores}
             />
           ) : (
@@ -256,7 +263,9 @@ export default function PoseMatchView({
 
               <div className="mt-3 text-sm text-white/50">
                 Target: {targetPoseId ?? "—"} | Step {Math.min(stepIndex + 1, poseIds.length)} /{" "}
-                {poseIds.length} | Tolerance: {effectiveThreshold.toFixed(0)}%
+                {poseIds.length}
+                {reps > 1 ? ` | Rep ${Math.min(roundIndex + 1, reps)} / ${reps}` : null}
+                {" "} | Tolerance: {effectiveThreshold.toFixed(0)}%
               </div>
 
               <div className="mt-3 text-sm text-white/80">
@@ -268,20 +277,28 @@ export default function PoseMatchView({
                 )}
               </div>
 
-              <div className="mt-2 text-xs text-white/50">
-                {!holdDone
-                  ? `Please wait: ${Math.ceil(holdRemaining / 1000)}s`
-                  : matched
-                  ? "Matched — will auto-advance."
-                  : "You can match it or click Next to move on."}
-              </div>
+              {blocked ? (
+                <div className="mt-2 text-xs text-red-200">
+                  {blockReason === "face_missing"
+                    ? "Face matching is enabled, but FaceMesh landmarks are missing (live or target). Game is paused."
+                    : "Pose matching is blocked. Game is paused."}
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-white/50">
+                  {!holdDone
+                    ? `Please wait: ${Math.ceil(holdRemaining / 1000)}s`
+                    : matched
+                    ? "Matched — will auto-advance."
+                    : "You can match it or click Next to move on."}
+                </div>
+              )}
             </div>
 
             <div className="shrink-0 flex flex-col items-end gap-4">
               <div className="p-4">
                 <button
                   type="button"
-                  disabled={!holdDone}
+                  disabled={!holdDone || blocked}
                   onClick={onNext}
                   className={[
                     "next-button",
@@ -289,18 +306,18 @@ export default function PoseMatchView({
                     "rounded-3xl font-semibold text-xl",
                     "ring-2 ring-white/30",
                     "transition-all duration-150",
-                    holdDone
+                    holdDone && !blocked
                       ? "bg-white/25 text-white hover:bg-white/35"
                       : "bg-white/5 text-white/40 cursor-not-allowed",
                   ].join(" ")}
-                  title={!holdDone ? "Wait for the hold timer" : "Advance"}
+                  title={blocked ? "Blocked" : !holdDone ? "Wait for the hold timer" : "Advance"}
                 >
                   Next →
                 </button>
               </div>
 
               <div className="text-xs text-white/50">
-                {!holdDone ? "Please wait…" : "Click Next to advance anytime"}
+                {blocked ? "Blocked." : !holdDone ? "Please wait…" : "Click Next to advance anytime"}
               </div>
             </div>
           </div>

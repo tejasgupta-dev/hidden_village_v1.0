@@ -8,12 +8,6 @@
  * B) Monotonic frame sequence numbers (and timestamps) for detecting gaps
  * C) Flush on page hide/unload using sendBeacon (best-effort) + keepalive fallback
  * D) De-dupe events by eventId (prevents dev StrictMode double-logs + accidental double dispatch)
- *
- * Notes:
- * - Server must expose:
- *   POST {apiBase}/plays/:playId/events  { events: [...] }
- *   POST {apiBase}/plays/:playId/frames  { frames: [...] }
- * - If your API uses cookie auth, keep credentials: "include"
  */
 export function createTelemetryBus({
   playId,
@@ -30,17 +24,14 @@ export function createTelemetryBus({
 
   let flushTimer = null;
 
-  // A) Separate locks so slow events don't block frames (or vice versa)
   let flushingEvents = false;
   let flushingFrames = false;
 
-  // B) Monotonic frame sequence
+  // Monotonic frame sequence
   let frameSeq = 0;
 
-  // Lifecycle handler teardown fns
   let teardownFns = [];
 
-  // D) De-dupe eventIds (bounded)
   const MAX_EVENT_IDS = 4000;
   const seenEventIds = new Map(); // eventId -> timestamp
 
@@ -60,7 +51,6 @@ export function createTelemetryBus({
     seenEventIds.set(id, ts);
     if (seenEventIds.size <= MAX_EVENT_IDS) return;
 
-    // Evict oldest ~10% to keep it cheap
     const evictCount = Math.ceil(MAX_EVENT_IDS * 0.1);
     let i = 0;
     for (const key of seenEventIds.keys()) {
@@ -100,7 +90,6 @@ export function createTelemetryBus({
     }
   }
 
-  // C) Best-effort beacon flush (works during unload in many browsers)
   function sendBeaconJson(url, payload) {
     try {
       if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") {
@@ -124,7 +113,6 @@ export function createTelemetryBus({
     try {
       await postJson(endpointEvents(), { events: batch });
     } catch (err) {
-      // put back (at front) so we retry later
       events = batch.concat(events);
       // eslint-disable-next-line no-console
       console.error(err);
@@ -153,7 +141,6 @@ export function createTelemetryBus({
   }
 
   async function flushAll() {
-    // run in parallel now that locks are separate
     await Promise.all([flushEvents(), flushFrames()]);
   }
 
@@ -162,33 +149,23 @@ export function createTelemetryBus({
 
     flushTimer = window.setInterval(() => void flushAll(), flushEveryMS);
 
-    // Make sure we don't run the unload flush twice
     let didPageFlush = false;
 
     const flushOnHide = () => {
       if (didPageFlush) return;
       didPageFlush = true;
 
-      // Snapshot buffers
       const evts = events;
       const frs = frames;
 
-      // Clear immediately to avoid double-send if app continues
       events = [];
       frames = [];
 
-      // Try sendBeacon first
-      const sentEvents = evts.length
-        ? sendBeaconJson(endpointEvents(), { events: evts })
-        : true;
-      const sentFrames = frs.length
-        ? sendBeaconJson(endpointFrames(), { frames: frs })
-        : true;
+      const sentEvents = evts.length ? sendBeaconJson(endpointEvents(), { events: evts }) : true;
+      const sentFrames = frs.length ? sendBeaconJson(endpointFrames(), { frames: frs }) : true;
 
-      // Fallback: keepalive fetch
       if (evts.length && !sentEvents) {
         void postJson(endpointEvents(), { events: evts }, { keepalive: true }).catch(() => {
-          // If we're not actually unloading (e.g. visibilitychange), restore
           events = evts.concat(events);
         });
       }
@@ -200,10 +177,8 @@ export function createTelemetryBus({
       }
     };
 
-    // pagehide is better than beforeunload for mobile + bfcache
     window.addEventListener("pagehide", flushOnHide);
 
-    // Some browsers prefer visibilitychange
     const onVisibility = () => {
       if (document.visibilityState === "hidden") flushOnHide();
     };
@@ -225,21 +200,12 @@ export function createTelemetryBus({
   return {
     playId,
 
-    /**
-     * Emits a telemetry event.
-     *
-     * IMPORTANT:
-     * - If payload.eventId is provided, the bus will de-dupe on it.
-     * - We also lift eventId to the top-level event object for easier backend handling.
-     */
     emitEvent(type, payload = {}, timestamp = nowMs()) {
       const eventId = payload?.eventId;
 
       if (isDupEventId(eventId)) return;
       if (eventId) rememberEventId(eventId, timestamp);
 
-      // Store eventId at top-level as well as in payload (if you keep it there)
-      // so your server can index it easily.
       enqueueEvent({
         type,
         timestamp,
@@ -250,11 +216,19 @@ export function createTelemetryBus({
 
     /**
      * Records a pose frame.
-     * Adds seq + timestamp so server can detect gaps / ordering.
+     * ✅ If caller provides seq, we use it and advance internal counter to avoid collisions.
      */
     recordPoseFrame(frame) {
       const timestamp = frame?.timestamp ?? nowMs();
-      const seq = frame?.seq ?? frameSeq++;
+
+      if (Number.isFinite(Number(frame?.seq))) {
+        const s = Number(frame.seq);
+        frameSeq = Math.max(frameSeq, s + 1);
+        enqueueFrame({ ...frame, seq: s, timestamp });
+        return;
+      }
+
+      const seq = frameSeq++;
       enqueueFrame({ ...frame, seq, timestamp });
     },
 

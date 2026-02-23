@@ -98,6 +98,7 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
       level?.introCursorDelayMS ??
       level?.cursorDelayMS ??
       level?.settings?.cursor?.delayMS ??
+      level?.cursor?.delayMS ??
       undefined
     );
   }
@@ -109,6 +110,7 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
       level?.outroCursorDelayMS ??
       level?.cursorDelayMS ??
       level?.settings?.cursor?.delayMS ??
+      level?.cursor?.delayMS ??
       undefined
     );
   }
@@ -119,6 +121,7 @@ function resolveCursorDelayMS({ storyLevel, level }, nodeType) {
     level?.poseCursorDelayMS ??
     level?.cursorDelayMS ??
     level?.settings?.cursor?.delayMS ??
+    level?.cursor?.delayMS ??
     undefined
   );
 }
@@ -167,8 +170,27 @@ function resolvePoseTolerances({ storyLevel, level }, poseIds) {
   });
 }
 
-export function buildStateNodesForLevel({ level: levelInput, story: gameInput, levelIndex = 0 }) {
-  // ✅ RTDB: treat as plain objects
+/**
+ * Prefer merged session settings (passed in) over level.settings
+ * so DEFAULT_SETTINGS.states.poseMatch=false actually works.
+ */
+function getStateEnabled({ level, settings }, key, fallback = true) {
+  const flags =
+    (settings?.states && isPlainObject(settings.states) ? settings.states : null) ??
+    (level?.settings?.states && isPlainObject(level.settings.states) ? level.settings.states : null);
+
+  if (!flags) return fallback;
+  if (!Object.prototype.hasOwnProperty.call(flags, key)) return fallback;
+  return flags[key] === true;
+}
+
+export function buildStateNodesForLevel({
+  level: levelInput,
+  story: gameInput,
+  levelIndex = 0,
+  settings = null, // <-- merged settings from createSession
+}) {
+  // RTDB: treat as plain objects
   const level = levelInput ?? null;
   const game = gameInput ?? null;
 
@@ -179,9 +201,12 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
   const levelId = level?.id ?? null;
   const gameId = game?.id ?? null;
 
-  // 1) INTRO
+  // eslint-disable-next-line no-console
+  console.log("[builder] effective settings.states:", settings?.states ?? level?.settings?.states);
+
+  /* ----------------------------- INTRO ----------------------------- */
   const introLines = normalizeDialogueLines(storyLevel?.intro);
-  if (introLines.length > 0) {
+  if (getStateEnabled({ level, settings }, "intro", true) && introLines.length > 0) {
     nodes.push({
       type: STATE_TYPES.INTRO,
       lines: introLines,
@@ -192,25 +217,26 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
     });
   }
 
-  // 2) Question-derived nodes (INTUITION / INSIGHT)
+  /* ---------------------- INTUITION / INSIGHT ---------------------- */
   const question = String(level?.question ?? "").trim();
   const hasQuestion = question.length > 0;
 
-  // ✅ strict boolean only
+  // strict boolean only
   const trueFalseEnabled = level?.trueFalseEnabled === true;
 
   const optionsRaw = level?.options ?? null;
   const options = normalizeOptions(optionsRaw);
   const hasOptions = options.length >= 1;
 
-  // Debug
-  console.log("buildstatenodes log level", level)
+  // eslint-disable-next-line no-console
   console.log("[builder] question:", question, "hasQuestion:", hasQuestion);
+  // eslint-disable-next-line no-console
   console.log("[builder] trueFalseEnabled:", trueFalseEnabled);
+  // eslint-disable-next-line no-console
   console.log("[builder] options.length:", options.length);
 
-  // ✅ INTUITION only if question exists AND trueFalseEnabled
-  if (hasQuestion && trueFalseEnabled) {
+  // INTUITION only if enabled + question exists + trueFalseEnabled
+  if (getStateEnabled({ level, settings }, "intuition", true) && hasQuestion && trueFalseEnabled) {
     nodes.push({
       type: STATE_TYPES.INTUITION,
       question,
@@ -222,8 +248,8 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
     });
   }
 
-  // ✅ INSIGHT only if question exists AND options length >= 1
-  if (hasQuestion && hasOptions) {
+  // INSIGHT only if enabled + question exists + options exist
+  if (getStateEnabled({ level, settings }, "insight", true) && hasQuestion && hasOptions) {
     nodes.push({
       type: STATE_TYPES.INSIGHT,
       question,
@@ -234,11 +260,11 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
     });
   }
 
-  // 3) POSES
+  /* ----------------------------- TWEEN / POSE_MATCH ----------------------------- */
   const poseIds = Array.from(new Set(getPoseIds(level))).filter(Boolean);
   const cursorDelayMS = resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH);
 
-  if (poseIds.length >= 2) {
+  if (getStateEnabled({ level, settings }, "tween", true) && poseIds.length >= 2) {
     nodes.push({
       type: STATE_TYPES.TWEEN,
       poseIds,
@@ -246,10 +272,11 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
       easing: level?.tweenEasing ?? storyLevel?.tweenEasing ?? "easeInOut",
       cursorDelayMS,
       levelId,
+      gameId,
     });
   }
 
-  if (poseIds.length >= 1) {
+  if (getStateEnabled({ level, settings }, "poseMatch", true) && poseIds.length >= 1) {
     const defaultTolerance = resolveDefaultPoseTolerance({ storyLevel, level });
     const poseTolerances = resolvePoseTolerances({ storyLevel, level }, poseIds);
 
@@ -262,12 +289,13 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
       cursorDelayMS,
       stepDurationMS: level?.poseDurationMS ?? storyLevel?.poseDurationMS ?? undefined,
       levelId,
+      gameId,
     });
   }
 
-  // 4) OUTRO
+  /* ----------------------------- OUTRO ----------------------------- */
   const outroLines = normalizeDialogueLines(storyLevel?.outro);
-  if (outroLines.length > 0) {
+  if (getStateEnabled({ level, settings }, "outro", true) && outroLines.length > 0) {
     nodes.push({
       type: STATE_TYPES.OUTRO,
       lines: outroLines,
@@ -278,6 +306,7 @@ export function buildStateNodesForLevel({ level: levelInput, story: gameInput, l
     });
   }
 
+  // eslint-disable-next-line no-console
   console.log("[builder] STATE_NODES:", nodes.map((n) => n.type));
   return nodes;
 }

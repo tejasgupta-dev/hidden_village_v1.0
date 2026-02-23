@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import { Tween } from "@/lib/pose/tween";
 
@@ -25,13 +25,19 @@ function safeParsePose(maybeJson) {
   }
 }
 
+function clampInt(n, { min = 1, max = 999 } = {}) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  const v = Math.trunc(x);
+  return Math.max(min, Math.min(max, v));
+}
+
 export default function TweenView({ session, node, dispatch, width = 800, height = 600 }) {
   const showCursor = !!session?.flags?.showCursor;
 
   const poseMap = useMemo(() => {
     const level = session?.game?.levels?.[session?.levelIndex] ?? null;
     const poses = level?.poses ?? null;
-    // DB format you showed: poses is an object map: { pose_<ts>: "<json>", ... }
     return poses && typeof poses === "object" ? poses : null;
   }, [session?.game, session?.levelIndex]);
 
@@ -41,17 +47,34 @@ export default function TweenView({ session, node, dispatch, width = 800, height
     return ids.map((id) => safeParsePose(poseMap[id])).filter(Boolean);
   }, [node?.poseIds, poseMap]);
 
-  const stepDurationMS = node?.stepDurationMS ?? 1000;
-  const totalDuration = Math.max(1, poses.length - 1) * stepDurationMS;
+  const stepDurationMS = Number(node?.stepDurationMS ?? 1000);
 
-  const onNext = () => dispatch(commands.next());
+  // total time for one full tween pass (0->1->2...): (poses.length - 1) steps
+  const passDurationMS = Math.max(1, poses.length - 1) * stepDurationMS;
+
+  // reps per level (minimum 1)
+  const reps = clampInt(session?.settings?.reps?.tween ?? 1, { min: 1, max: 999 });
+
+  const totalDurationMS = passDurationMS * reps;
+
+  const onNext = () => dispatch(commands.next({ source: "click" }));
+
+  // ✅ auto-advance after N passes
+  useEffect(() => {
+    if (!poses || poses.length < 2) return;
+
+    // if user disables tween cursor, still auto-advance is OK (it's per level behavior)
+    const t = window.setTimeout(() => {
+      dispatch(commands.next({ source: "auto" }));
+    }, totalDurationMS);
+
+    return () => window.clearTimeout(t);
+  }, [dispatch, poses, totalDurationMS, session?.nodeIndex]);
 
   return (
     <div className="absolute inset-0 z-20 pointer-events-auto">
-      {/* background overlay */}
       <div className="absolute inset-0 bg-black/30" />
 
-      {/* main tween area */}
       <div className="absolute inset-0 flex items-center justify-center">
         {poses.length >= 2 ? (
           <Tween
@@ -64,17 +87,13 @@ export default function TweenView({ session, node, dispatch, width = 800, height
             isPlaying={true}
           />
         ) : (
-          <div className="text-white/80 text-sm">
-            Tween needs at least 2 poses (got {poses.length}).
-          </div>
+          <div className="text-white/80 text-sm">Tween needs at least 2 poses (got {poses.length}).</div>
         )}
       </div>
 
-      {/* bottom bar exactly like Intro */}
       <div className="absolute left-0 right-0 bottom-0 p-8">
         <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
           <div className="flex gap-8 items-end">
-            {/* "speaker" placeholder (optional) */}
             <div className="shrink-0">
               <DefaultSpeakerSprite />
               <div className="mt-3 text-sm text-white/70 text-center">Tween</div>
@@ -86,14 +105,12 @@ export default function TweenView({ session, node, dispatch, width = 800, height
                 style={{ fontSize: session.settings?.ui?.dialogueFontSize ?? 22 }}
               >
                 {poses.length >= 2
-                  ? `Animating ${poses.length} poses (${totalDuration} ms total).`
+                  ? `Animating ${poses.length} poses • ${reps}× (${totalDurationMS} ms total).`
                   : "Pose data not available for tween."}
               </div>
 
               {Array.isArray(node?.poseIds) && node.poseIds.length > 0 && (
-                <div className="mt-3 text-sm text-white/50">
-                  {node.poseIds.length} pose ids loaded
-                </div>
+                <div className="mt-3 text-sm text-white/50">{node.poseIds.length} pose ids loaded</div>
               )}
             </div>
 
@@ -118,9 +135,7 @@ export default function TweenView({ session, node, dispatch, width = 800, height
                 </button>
               </div>
 
-              <div className="text-xs text-white/50">
-                {showCursor ? "Click or hover to continue" : "Please wait…"}
-              </div>
+              <div className="text-xs text-white/50">{showCursor ? "Click to continue" : "Please wait…"}</div>
             </div>
           </div>
         </div>
