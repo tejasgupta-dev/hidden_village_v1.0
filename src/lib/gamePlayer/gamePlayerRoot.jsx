@@ -12,7 +12,7 @@ import { createLocalCameraRecorder } from "./telemetry/localCameraRecorder";
 
 import PoseCursor from "@/lib/pose/poseCursor";
 import PoseDrawer from "@/lib/pose/poseDrawer";
-import getPoseData from "@/lib/mediapipe/getPoseData";
+import usePoseData from "@/lib/hooks/usePoseData";
 
 import StateRenderer from "./stateRenderer";
 
@@ -261,7 +261,7 @@ function GamePlayerInner({
   // Local seq so server can aggregate ranges by seq
   const poseSeqRef = useRef(0);
 
-  // Required hidden video element for getPoseData
+  // Required hidden video element for usePoseData
   const videoRef = useRef(null);
 
   // Local camera+mic recorder (hidden preview)
@@ -315,7 +315,7 @@ function GamePlayerInner({
     poseDataRef.current = data;
   }, []);
 
-  const { loading, error } = getPoseData({
+  const { loading, error } = usePoseData({
     videoRef,
     width: 640,
     height: 480,

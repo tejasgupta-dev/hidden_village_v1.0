@@ -9,9 +9,9 @@ import { enrichLandmarks } from "@/lib/pose/landmark";
  *
  * Usage:
  * const videoRef = useRef(null);
- * const { loading, error } = getPoseData({ videoRef, width, height, onPoseData });
+ * const { loading, error } = ({ videoRef, width, height, onPoseData });
  */
-export default function getPoseData({ videoRef, width, height, onPoseData }) {
+export default function usePoseData({ videoRef, width, height, onPoseData }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
