@@ -124,7 +124,15 @@ function buildPoseFrameContext(session) {
   return { stateType, nodeIndex, levelIndex, levelId, repIndex, stepIndex, targetPoseId };
 }
 
-export default function GamePlayerInner({ game, levelIndex, deviceId, playId, onComplete, width, height }) {
+export default function GamePlayerInner({
+  game,
+  levelIndex,
+  deviceId, // kept for signature compat
+  playId,
+  onComplete,
+  width,
+  height,
+}) {
   const telemetryRef = useRef(null);
 
   // Pose data stays in a ref (no re-renders at 30-60fps)
@@ -196,7 +204,6 @@ export default function GamePlayerInner({ game, levelIndex, deviceId, playId, on
   });
 
   // Tick loop (drives timers + optional frame recording)
-  // ✅ When paused, RAF loop stops => telemetry frames stop, timers stop.
   useRafTick({
     enabled: !session.flags?.paused,
     onTick: ({ now, dt, elapsed }) => {
@@ -293,18 +300,10 @@ export default function GamePlayerInner({ game, levelIndex, deviceId, playId, on
     dispatch(commands.consumeEffects());
   }, [session.effects, onComplete, playId, session]);
 
-  // IMPORTANT: use session.levelIndex (because reducer now advances levels)
-  const activeLevelIndex = Number.isFinite(Number(session?.levelIndex)) ? session.levelIndex : levelIndex;
-  const level = game.levels?.[activeLevelIndex];
-
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
 
-  // live pose for the drawer
+  // live pose for the drawer (overlay, but no box)
   const poseForDrawer = usePoseDrawerPose(poseDataRef);
-
-  // Layout sizes
-  const rightPanelWidth = Math.max(260, Math.floor(width * 0.28));
-  const leftPanelWidth = width - rightPanelWidth;
 
   // Dialogue overlay (for intro/outro)
   const dialogueText = (() => {
@@ -321,7 +320,12 @@ export default function GamePlayerInner({ game, levelIndex, deviceId, playId, on
   })();
 
   // Similarity overlays only during POSE_MATCH
-  const rightSimilarityScores = type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
+  const similarityScores =
+    type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
+
+  // ✅ "normal" pose size
+  const poseW = 320;
+  const poseH = 320;
 
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
@@ -331,39 +335,38 @@ export default function GamePlayerInner({ game, levelIndex, deviceId, playId, on
       {/* Hidden preview used for camera+mic recording */}
       <video ref={cameraPreviewRef} style={{ display: "none" }} playsInline muted />
 
-      {/* Background */}
+      {/* ✅ Common background (public/assets/bg.jpg) */}
       <div className="absolute inset-0">
-        {level?.background ? (
-          <img src={level.background} alt="" className="w-full h-full object-cover opacity-90" />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-b from-gray-900 to-black" />
-        )}
+        <img src="/assets/bg.jpg" alt="" className="w-full h-full object-cover opacity-90" />
       </div>
 
-      <div className="absolute inset-0 flex">
-        {/* LEFT */}
-        <div className="relative h-full" style={{ width: leftPanelWidth }}>
-          <StateRenderer
-            session={session}
-            dispatch={dispatch}
-            poseDataRef={poseDataRef}
-            width={leftPanelWidth}
-            height={height}
-            dialogueText={dialogueText}
-            speaker={speaker}
-          />
-        </div>
+      {/* ✅ Main game (full width) */}
+      <div className="absolute inset-0">
+        <StateRenderer
+          session={session}
+          dispatch={dispatch}
+          poseDataRef={poseDataRef}
+          width={width}
+          height={height}
+          dialogueText={dialogueText}
+          speaker={speaker}
+        />
+      </div>
 
-        {/* RIGHT */}
-        <div className="relative h-full border-l border-white/10 bg-black/20" style={{ width: rightPanelWidth }}>
-          <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 text-xs text-gray-300 bg-black/40">
-            Pose View
-          </div>
-
-          <div className="absolute inset-0 pt-8">
-            <PoseDrawer poseData={poseForDrawer} width={rightPanelWidth} height={height} similarityScores={rightSimilarityScores} />
-          </div>
-        </div>
+      {/* ✅ Pose on the right, vertically centered (slightly below center), no box/background */}
+      <div
+        className="absolute right-6 z-[55] pointer-events-none"
+        style={{
+          top: "55%",
+          transform: "translateY(-50%)",
+        }}
+      >
+        <PoseDrawer
+          poseData={poseForDrawer}
+          width={poseW}
+          height={poseH}
+          similarityScores={similarityScores}
+        />
       </div>
 
       {/* Pose cursor overlay */}
