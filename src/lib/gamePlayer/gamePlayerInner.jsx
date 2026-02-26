@@ -323,10 +323,6 @@ export default function GamePlayerInner({
   const similarityScores =
     type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
 
-  // ✅ "normal" pose size
-  const poseW = 320;
-  const poseH = 320;
-
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
       {/* Hidden video used for mediapipe pose detection */}
@@ -353,18 +349,11 @@ export default function GamePlayerInner({
         />
       </div>
 
-      {/* ✅ Pose on the right, vertically centered (slightly below center), no box/background */}
-      <div
-        className="absolute right-6 z-[55] pointer-events-none"
-        style={{
-          top: "55%",
-          transform: "translateY(-50%)",
-        }}
-      >
+      <div className="absolute right-0 top-60 z-[55] pointer-events-none w-1/3 h-screen">
         <PoseDrawer
           poseData={poseForDrawer}
-          width={poseW}
-          height={poseH}
+          width={Math.floor(width * 0.20)}
+          height={Math.floor(height * 0.40)}
           similarityScores={similarityScores}
         />
       </div>
