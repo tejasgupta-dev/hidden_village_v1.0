@@ -27,8 +27,6 @@ export default function PauseUI({ session, dispatch, onBackToMenu }) {
   }, [onBackToMenu]);
 
   // ---- Stopwatch that does NOT restart and freezes while paused ----
-  // We accumulate elapsed locally using rAF, but stop advancing when paused.
-  // This is independent of the game's tick loop so it keeps rendering even when game is paused.
   const startedAtRef = useRef(null); // perf.now at start of current running segment
   const accumulatedRef = useRef(0); // ms accumulated across segments
   const rafRef = useRef(null);
@@ -95,20 +93,18 @@ export default function PauseUI({ session, dispatch, onBackToMenu }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [paused, onPause, onResume]);
 
-  // Shared pose-cursor clickable button base (matches your IntuitionView pattern)
+  // ✅ Shared pose-cursor clickable button base
+  // Added "pause-ui-button" so PoseCursor can target these only while paused.
   const baseBtn =
-    "next-button relative overflow-hidden rounded-[28px] ring-2 transition-all duration-150 select-none pointer-events-auto";
+    "next-button pause-ui-button relative overflow-hidden rounded-[28px] ring-2 transition-all duration-150 select-none pointer-events-auto";
   const idleBtn = "bg-black/35 ring-white/20 hover:bg-black/25 hover:ring-white/35";
   const accentBtn = "bg-white/15 ring-white/35 hover:bg-white/20 hover:ring-white/50";
 
   return (
-    <div className="absolute inset-0 z-[80] pointer-events-none">
-      {/* Stopwatch (always visible) */}
+    <div className="absolute inset-0 z-[80]">
+      {/* Stopwatch (always visible; doesn't need clicks) */}
       <div className="absolute top-4 left-4 pointer-events-none">
-        <div
-          className="px-3 py-2 rounded-xl bg-black/35 ring-1 ring-white/15 backdrop-blur-md text-white/90 font-mono text-sm"
-          aria-label={`Elapsed time ${label}`}
-        >
+        <div className="px-3 py-2 rounded-xl bg-black/35 ring-1 ring-white/15 backdrop-blur-md text-white/90 font-mono text-sm">
           {label}
           {paused ? <span className="ml-2 text-white/50">(paused)</span> : null}
         </div>
@@ -121,11 +117,7 @@ export default function PauseUI({ session, dispatch, onBackToMenu }) {
             type="button"
             onClick={onPause}
             data-pose-hover-ms={650}
-            className={[
-              baseBtn,
-              accentBtn,
-              "px-6 py-3 text-base font-semibold",
-            ].join(" ")}
+            className={[baseBtn, accentBtn, "px-6 py-3 text-base font-semibold"].join(" ")}
             aria-label="Pause game"
           >
             Pause
@@ -135,42 +127,41 @@ export default function PauseUI({ session, dispatch, onBackToMenu }) {
 
       {/* Paused UI */}
       {paused && (
-        <div className="absolute inset-0 z-[90] pointer-events-auto">
-          {/* dim backdrop (does NOT resume on click) */}
-          <div className="absolute inset-0 bg-black/55" />
+        <div className="absolute inset-0 z-[90]">
+          {/* blocker for real pointer clicks */}
+          <div className="absolute inset-0 bg-black/55 pointer-events-auto" />
 
-          {/* Big resume button */}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <button
-              type="button"
-              onClick={onResume}
-              data-pose-hover-ms={650}
-              className={[
-                baseBtn,
-                "bg-white/20 ring-white/45 hover:bg-white/25 hover:ring-white/60",
-                "px-10 py-6 text-3xl font-bold text-white",
-              ].join(" ")}
-              aria-label="Resume game"
-            >
-              Resume
-            </button>
-          </div>
+          {/* Buttons layer */}
+          <div className="absolute inset-0 pointer-events-none">
+            {/* Big resume button */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <button
+                type="button"
+                onClick={onResume}
+                data-pose-hover-ms={650}
+                className={[
+                  baseBtn,
+                  "bg-white/20 ring-white/45 hover:bg-white/25 hover:ring-white/60",
+                  "px-10 py-6 text-3xl font-bold text-white",
+                ].join(" ")}
+                aria-label="Resume game"
+              >
+                Resume
+              </button>
+            </div>
 
-          {/* Bottom-left back to menu */}
-          <div className="absolute bottom-4 left-4">
-            <button
-              type="button"
-              onClick={onMenu}
-              data-pose-hover-ms={750}
-              className={[
-                baseBtn,
-                idleBtn,
-                "px-4 py-2 text-sm font-medium text-white/90",
-              ].join(" ")}
-              aria-label="Back to menu"
-            >
-              Back to menu
-            </button>
+            {/* Bottom-left back to menu */}
+            <div className="absolute bottom-4 left-4 pointer-events-none">
+              <button
+                type="button"
+                onClick={onMenu}
+                data-pose-hover-ms={750}
+                className={[baseBtn, idleBtn, "px-4 py-2 text-sm font-medium text-white/90"].join(" ")}
+                aria-label="Back to menu"
+              >
+                Back to menu
+              </button>
+            </div>
           </div>
         </div>
       )}

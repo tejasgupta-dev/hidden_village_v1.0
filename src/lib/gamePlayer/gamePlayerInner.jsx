@@ -375,6 +375,7 @@ export default function GamePlayerInner({
         containerWidth={width}
         containerHeight={height}
         sensitivity={session.settings?.cursor?.sensitivity ?? 1.5}
+        hoverSelector={session.flags?.paused ? ".pause-ui-button" : ".next-button"}
       />
 
       <PauseUI
