@@ -15,6 +15,7 @@ import PoseDrawer from "@/lib/pose/poseDrawer";
 import usePoseData from "@/lib/hooks/usePoseData";
 
 import StateRenderer from "./stateRenderer";
+import PauseUI from "./pauseUI";
 
 function isDialogueLike(type) {
   return type === STATE_TYPES.INTRO || type === STATE_TYPES.OUTRO;
@@ -56,6 +57,9 @@ const TELEMETRY_ALLOWED = new Set([
 
   "STATE_ENTER",
   "STATE_EXIT",
+
+  "PAUSE",
+  "RESUME",
 
   "POSE_MATCH_AUTO_NEXT",
   "POSE_MATCH_CLICK_NEXT",
@@ -125,12 +129,7 @@ function buildPoseFrameContext(session) {
   return { stateType, nodeIndex, levelIndex, levelId, repIndex, stepIndex, targetPoseId };
 }
 
-export default function GamePlayerRoot({
-  game,
-  levelIndex = 0,
-  deviceId = "web",
-  onComplete,
-}) {
+export default function GamePlayerRoot({ game, levelIndex = 0, deviceId = "web", onComplete }) {
   const { width, height } = useWindowSize(640, 480);
 
   const gameId = game?.id ?? null;
@@ -243,15 +242,7 @@ export default function GamePlayerRoot({
   );
 }
 
-function GamePlayerInner({
-  game,
-  levelIndex,
-  deviceId, // kept for signature compat
-  playId,
-  onComplete,
-  width,
-  height,
-}) {
+function GamePlayerInner({ game, levelIndex, deviceId, playId, onComplete, width, height }) {
   const telemetryRef = useRef(null);
 
   // Pose data stays in a ref (no re-renders at 30-60fps)
@@ -323,6 +314,7 @@ function GamePlayerInner({
   });
 
   // Tick loop (drives timers + optional frame recording)
+  // ✅ When paused, RAF loop stops => telemetry frames stop, timers stop.
   useRafTick({
     enabled: !session.flags?.paused,
     onTick: ({ now, dt, elapsed }) => {
@@ -380,9 +372,9 @@ function GamePlayerInner({
         // Start camera recording once, at first real STATE_ENTER
         if (!startedCameraRef.current && evt?.type === "STATE_ENTER") {
           startedCameraRef.current = true;
-          cameraRecorderRef.current
-            ?.start?.()
-            .catch((e) => console.error("Camera recorder start failed:", e));
+          cameraRecorderRef.current?.start?.().catch((e) => {
+            console.error("Camera recorder start failed:", e);
+          });
         }
 
         const isInitEnter =
@@ -390,9 +382,7 @@ function GamePlayerInner({
           evt?.nodeIndex === 0 &&
           (evt?.reason === "INIT" || evt?.reason === "INIT_MOUNT" || evt?.reason === "INIT_SESSION");
 
-        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter)) {
-          continue;
-        }
+        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter)) continue;
 
         if (!evt?.type || !TELEMETRY_ALLOWED.has(evt.type)) continue;
 
@@ -422,7 +412,9 @@ function GamePlayerInner({
   }, [session.effects, onComplete, playId, session]);
 
   // IMPORTANT: use session.levelIndex (because reducer now advances levels)
-  const activeLevelIndex = Number.isFinite(Number(session?.levelIndex)) ? session.levelIndex : levelIndex;
+  const activeLevelIndex = Number.isFinite(Number(session?.levelIndex))
+    ? session.levelIndex
+    : levelIndex;
   const level = game.levels?.[activeLevelIndex];
 
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
@@ -449,8 +441,16 @@ function GamePlayerInner({
   })();
 
   // Similarity overlays only during POSE_MATCH
-  const rightSimilarityScores =
-    type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
+  const rightSimilarityScores = type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
+
+  // ✅ Back to menu default: treat as "end session + return to caller"
+  const handleBackToMenu = useCallback(() => {
+    // stop camera recorder (optional safety; doesn't affect pose)
+    cameraRecorderRef.current?.stopAndDownload?.().catch(() => {});
+
+    // If parent uses onComplete to exit the player, this is the safest default.
+    onComplete?.();
+  }, [onComplete]);
 
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
@@ -484,10 +484,7 @@ function GamePlayerInner({
         </div>
 
         {/* RIGHT */}
-        <div
-          className="relative h-full border-l border-white/10 bg-black/20"
-          style={{ width: rightPanelWidth }}
-        >
+        <div className="relative h-full border-l border-white/10 bg-black/20" style={{ width: rightPanelWidth }}>
           <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 text-xs text-gray-300 bg-black/40">
             Pose View
           </div>
@@ -503,12 +500,21 @@ function GamePlayerInner({
         </div>
       </div>
 
-      {/* Pose cursor overlay */}
+      {/* Pose cursor overlay (kept running; you can choose to hide while paused if desired) */}
       <PoseCursor
         poseDataRef={poseDataRef}
         containerWidth={width}
         containerHeight={height}
         sensitivity={session.settings?.cursor?.sensitivity ?? 1.5}
+      />
+
+      <PauseUI
+        session={session}
+        dispatch={dispatch}
+        onBackToMenu={() => {
+          cameraRecorderRef.current?.stopAndDownload?.().catch(() => {});
+          onComplete?.();
+        }}
       />
 
       {/* Loading overlay for pose */}
