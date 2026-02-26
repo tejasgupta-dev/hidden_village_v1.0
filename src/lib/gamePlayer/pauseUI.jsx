@@ -101,7 +101,7 @@ export default function PauseUI({ session, dispatch, onBackToMenu }) {
   const accentBtn = "bg-white/15 ring-white/35 hover:bg-white/20 hover:ring-white/50";
 
   return (
-    <div className="absolute inset-0 z-[80]">
+    <div className={["absolute inset-0 z-[80]", paused ? "pointer-events-auto" : "pointer-events-none"].join(" ")}>
       {/* Stopwatch (always visible; doesn't need clicks) */}
       <div className="absolute top-4 left-4 pointer-events-none">
         <div className="px-3 py-2 rounded-xl bg-black/35 ring-1 ring-white/15 backdrop-blur-md text-white/90 font-mono text-sm">
