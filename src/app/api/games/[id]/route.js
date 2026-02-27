@@ -103,6 +103,7 @@ export async function GET(req, context) {
         success: true,
         preview: true,
         hasPin: true,
+        code: "PIN_REQUIRED",
       });
     }
 

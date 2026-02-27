@@ -5,12 +5,6 @@ import { apiClient } from "./apiClient";
  * Pure HTTP operations with no business logic
  */
 export const gamesApi = {
-  /**
-   * List games with optional query parameters
-   * @param {Object} params - Query parameters (mode, etc.)
-   * @param {Object} options - Request options
-   * @returns {Promise<{success: boolean, games: Array}>}
-   */
   list(params = {}, options = {}) {
     const query = new URLSearchParams(params).toString();
     return apiClient(`/api/games${query ? `?${query}` : ""}`, {
@@ -18,23 +12,12 @@ export const gamesApi = {
     });
   },
 
-  /**
-   * Get a single game
-   * @param {string} gameId - The game ID
-   * @param {Object} options - Request options
-   * @param {string} options.pin - PIN for protected games (sent in header)
-   * @param {Object} options.params - Query parameters (mode, etc.)
-   * @param {string} options.credentials - Credentials mode
-   * @returns {Promise<{success: boolean, game: Object}>}
-   */
   get(gameId, options = {}) {
     const { pin, params = {}, credentials = "omit" } = options;
     const query = new URLSearchParams(params).toString();
 
     const headers = {};
-    if (pin) {
-      headers["x-game-pin"] = pin;
-    }
+    if (pin) headers["x-game-pin"] = pin;
 
     return apiClient(`/api/games/${gameId}${query ? `?${query}` : ""}`, {
       credentials,
@@ -42,11 +25,6 @@ export const gamesApi = {
     });
   },
 
-  /**
-   * Create a new game
-   * @param {Object} gameData - Game data
-   * @returns {Promise<{success: boolean, id: string, game: Object}>}
-   */
   create(gameData) {
     return apiClient("/api/games", {
       method: "POST",
@@ -55,21 +33,11 @@ export const gamesApi = {
     });
   },
 
-  /**
-   * Update a game
-   * @param {string} gameId - The game ID
-   * @param {Object} updates - Fields to update
-   * @param {Object} options - Request options
-   * @param {string} options.pin - PIN for protected games (sent in header)
-   * @returns {Promise<{success: boolean, game: Object}>}
-   */
   update(gameId, updates, options = {}) {
     const { pin } = options;
 
     const headers = {};
-    if (pin) {
-      headers["x-game-pin"] = pin;
-    }
+    if (pin) headers["x-game-pin"] = pin;
 
     return apiClient(`/api/games/${gameId}`, {
       method: "PATCH",
@@ -79,20 +47,11 @@ export const gamesApi = {
     });
   },
 
-  /**
-   * Delete a game
-   * @param {string} gameId - The game ID
-   * @param {Object} options - Request options
-   * @param {string} options.pin - PIN for protected games (sent in header)
-   * @returns {Promise<{success: boolean, message: string}>}
-   */
   remove(gameId, options = {}) {
     const { pin } = options;
 
     const headers = {};
-    if (pin) {
-      headers["x-game-pin"] = pin;
-    }
+    if (pin) headers["x-game-pin"] = pin;
 
     return apiClient(`/api/games/${gameId}`, {
       method: "DELETE",
@@ -101,21 +60,10 @@ export const gamesApi = {
     });
   },
 
-  /**
-   * Get all levels for a game
-   * @param {string} gameId - The game ID
-   * @returns {Promise<{success: boolean, levels: Array}>}
-   */
   getLevels(gameId) {
     return apiClient(`/api/games/${gameId}/levels`);
   },
 
-  /**
-   * Get a specific level
-   * @param {string} gameId - The game ID
-   * @param {string} levelId - The level ID
-   * @returns {Promise<{success: boolean, level: Object}>}
-   */
   getLevel(gameId, levelId) {
     return apiClient(`/api/games/${gameId}/levels/${levelId}`);
   },
@@ -123,13 +71,6 @@ export const gamesApi = {
   /**
    * Upload a game asset (image)
    * Route: POST /api/games/:id/uploads
-   *
-   * @param {string} gameId
-   * @param {File} file
-   * @param {Object} options
-   * @param {string} options.pin - optional game PIN (sent in header)
-   * @param {string} options.kind - optional folder grouping (e.g. "dialogue", "avatar", "background")
-   * @returns {Promise<{success: boolean, path: string, url?: string}>}
    */
   uploadAsset(gameId, file, options = {}) {
     const { pin, kind = "misc" } = options;
@@ -141,7 +82,6 @@ export const gamesApi = {
     form.append("file", file);
     form.append("kind", kind);
 
-    // NOTE: apiClient must support FormData bodies (i.e., don't force JSON headers)
     return apiClient(`/api/games/${gameId}/uploads`, {
       method: "POST",
       credentials: "include",
@@ -150,6 +90,77 @@ export const gamesApi = {
     });
   },
 
+  /**
+   * ---- NEW: Sprites library ----
+   * Route:
+   *  GET  /api/games/:id/sprites
+   *  POST /api/games/:id/sprites
+   *  GET  /api/games/:id/sprites/:spriteId
+   *  DELETE /api/games/:id/sprites/:spriteId
+   */
+
+  listSprites(gameId, options = {}) {
+    const { pin, credentials = "include" } = options;
+
+    const headers = {};
+    if (pin) headers["x-game-pin"] = pin;
+
+    return apiClient(`/api/games/${gameId}/sprites`, {
+      method: "GET",
+      credentials,
+      headers,
+    });
+  },
+
+  uploadSprite(gameId, file, options = {}) {
+    const {
+      pin,
+      type = "other", // "speaker" | "background" | "other"
+      name, // optional display name
+      credentials = "include",
+    } = options;
+
+    const headers = {};
+    if (pin) headers["x-game-pin"] = pin;
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("type", type);
+    if (name) form.append("name", name);
+
+    return apiClient(`/api/games/${gameId}/sprites`, {
+      method: "POST",
+      credentials,
+      headers,
+      body: form,
+    });
+  },
+
+  getSprite(gameId, spriteId, options = {}) {
+    const { pin, credentials = "include" } = options;
+
+    const headers = {};
+    if (pin) headers["x-game-pin"] = pin;
+
+    return apiClient(`/api/games/${gameId}/sprites/${spriteId}`, {
+      method: "GET",
+      credentials,
+      headers,
+    });
+  },
+
+  deleteSprite(gameId, spriteId, options = {}) {
+    const { pin, credentials = "include" } = options;
+
+    const headers = {};
+    if (pin) headers["x-game-pin"] = pin;
+
+    return apiClient(`/api/games/${gameId}/sprites/${spriteId}`, {
+      method: "DELETE",
+      credentials,
+      headers,
+    });
+  },
 };
 
 export default gamesApi;

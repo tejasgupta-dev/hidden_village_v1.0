@@ -1,15 +1,19 @@
 export async function apiClient(url, options = {}) {
   try {
-    const { headers: customHeaders = {}, body, ...rest } = options;
+    const {
+      headers: customHeaders = {},
+      body,
+      ...rest
+    } = options;
 
-    const isFormData =
-      typeof FormData !== "undefined" && body instanceof FormData;
+    const headers = { ...customHeaders };
 
-    // Only set JSON content-type if we're NOT sending FormData
-    const headers = {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
-      ...customHeaders,
-    };
+    // Only set JSON header if body is NOT FormData
+    const isFormData = body instanceof FormData;
+
+    if (!isFormData && body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
 
     const res = await fetch(url, {
       ...rest,
@@ -17,20 +21,11 @@ export async function apiClient(url, options = {}) {
       headers,
     });
 
-    // Try to parse JSON when possible
-    const contentType = res.headers.get("content-type") || "";
-    const data = contentType.includes("application/json")
-      ? await res.json().catch(() => ({}))
-      : await res.text().catch(() => "");
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      const message =
-        (data && typeof data === "object" && data.message) ||
-        (typeof data === "string" && data) ||
-        "API Error";
-
-      const error = new Error(message);
-      error.code = data?.code;
+      const error = new Error(data.message || "API Error");
+      error.code = data.code;
       error.status = res.status;
       error.data = data;
       throw error;

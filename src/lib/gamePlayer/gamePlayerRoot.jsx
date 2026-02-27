@@ -478,8 +478,7 @@ function GamePlayerInner({
             poseDataRef={poseDataRef}
             width={leftPanelWidth}
             height={height}
-            dialogueText={dialogueText}
-            speaker={speaker}
+            game={game}
           />
         </div>
 
