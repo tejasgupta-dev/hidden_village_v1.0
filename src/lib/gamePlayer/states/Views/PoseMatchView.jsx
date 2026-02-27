@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRafTick } from "@/lib/gamePlayer/runtime/useRafTick";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import PoseDrawer from "@/lib/pose/poseDrawer";
 import { clampPct, computePoseMatchFrame } from "@/lib/pose/poseMatching";
@@ -27,10 +28,6 @@ function safeParsePose(maybeJson) {
   }
 }
 
-function nowMS() {
-  return typeof performance !== "undefined" ? performance.now() : Date.now();
-}
-
 export default function PoseMatchView({
   session,
   node,
@@ -39,6 +36,8 @@ export default function PoseMatchView({
   width = 800,
   height = 600,
 }) {
+  const paused = !!session?.flags?.paused;
+
   const minHoldMS = Math.max(0, Number(node?.minHoldMS ?? 2000));
 
   const level = useMemo(
@@ -94,25 +93,18 @@ export default function PoseMatchView({
     return 70;
   }, [node, stepIndex, level, targetPoseId, targetPose]);
 
-  /* ----------------------------- hold gate ----------------------------- */
+  /* ----------------------------- hold gate (RAF-based) ----------------------------- */
 
-  const stepStartRef = useRef(nowMS());
+  const holdElapsedRef = useRef(0); // ms
   const [holdElapsed, setHoldElapsed] = useState(0);
 
-  useEffect(() => {
-    stepStartRef.current = nowMS();
-    setHoldElapsed(0);
-  }, [session.nodeIndex, stepIndex, targetPoseId]);
-
-  useEffect(() => {
-    const t = setInterval(() => setHoldElapsed(nowMS() - stepStartRef.current), 100);
-    return () => clearInterval(t);
-  }, []);
+  // throttle UI updates so we don't re-render at 60fps
+  const uiAccRef = useRef(0);
 
   const holdRemaining = Math.max(0, minHoldMS - holdElapsed);
   const holdDone = holdElapsed >= minHoldMS;
 
-  /* ----------------------------- compute + dispatch ----------------------------- */
+  /* ----------------------------- compute + dispatch (RAF-based) ----------------------------- */
 
   const includeMask = session?.settings?.include ?? null;
 
@@ -120,17 +112,43 @@ export default function PoseMatchView({
   const [blocked, setBlocked] = useState(false);
   const [blockReason, setBlockReason] = useState(null);
 
+  // compute only every 100ms (10 Hz)
+  const scoreAccRef = useRef(0);
+  const SCORE_EVERY_MS = 100;
+  const UI_EVERY_MS = 100;
+
+  // reset per-step state
   useEffect(() => {
+    holdElapsedRef.current = 0;
+    setHoldElapsed(0);
+    uiAccRef.current = 0;
+
+    scoreAccRef.current = 0;
+
     pausedForBlockRef.current = false;
     setBlocked(false);
     setBlockReason(null);
   }, [session.nodeIndex, stepIndex, targetPoseId]);
 
-  useEffect(() => {
-    let cancelled = false;
+  useRafTick({
+    // ✅ Stops entirely when paused (so no matching + no hold updates + no auto logic from this component)
+    enabled: !paused,
+    onTick: ({ dt }) => {
+      const d = Math.max(0, Number(dt) || 0);
 
-    const timer = setInterval(() => {
-      if (cancelled) return;
+      // Hold timer increments only while NOT paused (since enabled: !paused)
+      holdElapsedRef.current += d;
+
+      uiAccRef.current += d;
+      if (uiAccRef.current >= UI_EVERY_MS) {
+        uiAccRef.current = uiAccRef.current % UI_EVERY_MS;
+        setHoldElapsed(holdElapsedRef.current);
+      }
+
+      // Pose score compute at 10Hz
+      scoreAccRef.current += d;
+      if (scoreAccRef.current < SCORE_EVERY_MS) return;
+      scoreAccRef.current = scoreAccRef.current % SCORE_EVERY_MS;
 
       const live = poseDataRef?.current ?? null;
 
@@ -154,8 +172,8 @@ export default function PoseMatchView({
       setBlockReason(r.blockReason ?? null);
 
       if (r.blocked) {
-        // You requested: pause and user can quit later
-        if (!pausedForBlockRef.current) {
+        // Pause once (do not spam)
+        if (!pausedForBlockRef.current && !session?.flags?.paused) {
           pausedForBlockRef.current = true;
           dispatch(commands.pause());
         }
@@ -180,13 +198,8 @@ export default function PoseMatchView({
           stepIndex,
         },
       });
-    }, 100);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [poseDataRef, targetPose, dispatch, thresholdPct, targetPoseId, stepIndex, includeMask]);
+    },
+  });
 
   /* ----------------------------- reducer truth ----------------------------- */
 
@@ -209,6 +222,9 @@ export default function PoseMatchView({
   }, [session.nodeIndex, stepIndex, targetPoseId, roundIndex]);
 
   useEffect(() => {
+    // ✅ Never auto-advance while paused
+    if (paused) return;
+
     if (blocked) return;
     if (!targetPoseId) return;
     if (!holdDone) return;
@@ -218,9 +234,10 @@ export default function PoseMatchView({
     didAutoAdvanceRef.current = true;
 
     dispatch(commands.next({ source: "auto" }));
-  }, [blocked, targetPoseId, holdDone, matched, dispatch]);
+  }, [paused, blocked, targetPoseId, holdDone, matched, dispatch]);
 
   const onNext = () => {
+    if (paused) return;
     if (blocked) return;
     if (!holdDone) return;
     dispatch(commands.next({ source: "click" }));
@@ -285,7 +302,9 @@ export default function PoseMatchView({
                 </div>
               ) : (
                 <div className="mt-2 text-xs text-white/50">
-                  {!holdDone
+                  {paused
+                    ? "Paused."
+                    : !holdDone
                     ? `Please wait: ${Math.ceil(holdRemaining / 1000)}s`
                     : matched
                     ? "Matched — will auto-advance."
@@ -298,7 +317,7 @@ export default function PoseMatchView({
               <div className="p-4">
                 <button
                   type="button"
-                  disabled={!holdDone || blocked}
+                  disabled={paused || !holdDone || blocked}
                   onClick={onNext}
                   className={[
                     "next-button",
@@ -306,18 +325,32 @@ export default function PoseMatchView({
                     "rounded-3xl font-semibold text-xl",
                     "ring-2 ring-white/30",
                     "transition-all duration-150",
-                    holdDone && !blocked
+                    !paused && holdDone && !blocked
                       ? "bg-white/25 text-white hover:bg-white/35"
                       : "bg-white/5 text-white/40 cursor-not-allowed",
                   ].join(" ")}
-                  title={blocked ? "Blocked" : !holdDone ? "Wait for the hold timer" : "Advance"}
+                  title={
+                    paused
+                      ? "Paused"
+                      : blocked
+                      ? "Blocked"
+                      : !holdDone
+                      ? "Wait for the hold timer"
+                      : "Advance"
+                  }
                 >
                   Next →
                 </button>
               </div>
 
               <div className="text-xs text-white/50">
-                {blocked ? "Blocked." : !holdDone ? "Please wait…" : "Click Next to advance anytime"}
+                {paused
+                  ? "Paused."
+                  : blocked
+                  ? "Blocked."
+                  : !holdDone
+                  ? "Please wait…"
+                  : "Click Next to advance anytime"}
               </div>
             </div>
           </div>

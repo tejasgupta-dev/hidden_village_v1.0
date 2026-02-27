@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Circle, Play, StopCircle, ChevronDown } from "lucide-react";
 
 import { useRafTick } from "@/lib/gamePlayer/runtime/useRafTick";
-import getPoseData from "@/lib/mediapipe/getPoseData";
+import usePoseData from "@/lib/hooks/usePoseData";
 import PoseDrawer from "@/lib/pose/poseDrawer";
 
 import { computePoseMatch, perFeatureToPerSegment } from "@/lib/pose/poseMatching";
@@ -166,7 +166,7 @@ export default function PoseCapture({
     poseDataRef.current = data ?? null;
   }, []);
 
-  const { loading, error } = getPoseData({
+  const { loading, error } = usePoseData({
     videoRef,
     width,
     height,
