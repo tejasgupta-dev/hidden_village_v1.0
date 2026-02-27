@@ -243,6 +243,36 @@ export const gameEditor = {
   async saveMultiple(gameId, fields, options = {}) {
     return gamesApi.update(gameId, fields, { pin: options.pin });
   },
+
+  /**
+   * Upload an image asset for a game
+   * @param {string} gameId
+   * @param {File} file
+   * @param {Object} options
+   * @param {string} options.pin - PIN for protected games
+   * @param {string} options.kind - e.g. "dialogue", "avatar", "background"
+   * @returns {Promise<{success: boolean, path: string, url?: string}>}
+   */
+  async uploadAsset(gameId, file, options = {}) {
+    if (!gameId) throw new Error("Game ID is required");
+    if (!file) throw new Error("File is required");
+
+    // lightweight validation (optional)
+    const allowed = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+    if (file.type && !allowed.has(file.type)) {
+      throw new Error("Only image uploads are allowed (png/jpg/webp/gif).");
+    }
+    const maxBytes = 5 * 1024 * 1024;
+    if (typeof file.size === "number" && file.size > maxBytes) {
+      throw new Error("Image is too large (max 5MB).");
+    }
+
+    return gamesApi.uploadAsset(gameId, file, {
+      pin: options.pin,
+      kind: options.kind || "misc",
+    });
+  },
+
 };
 
 /* ------------------ VALIDATION ------------------ */

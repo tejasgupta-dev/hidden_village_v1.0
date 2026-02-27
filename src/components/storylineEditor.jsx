@@ -21,6 +21,18 @@ export default function StorylineEditor({ game, setGame, onClose }) {
     outro: [],
   };
 
+  const speakersMap = useMemo(() => {
+    return (game?.settings?.speakers && typeof game.settings.speakers === "object")
+      ? game.settings.speakers
+      : {};
+  }, [game?.settings?.speakers]);
+
+  const speakerOptions = useMemo(() => {
+    return Object.values(speakersMap)
+      .map((s) => ({ id: s.id, name: s.name }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [speakersMap]);
+
   const inputClass =
     "border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900 " +
     "placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 " +
@@ -58,7 +70,7 @@ export default function StorylineEditor({ game, setGame, onClose }) {
     const newGame = ensureLevel(safeLevelIndex);
     newGame.storyline[safeLevelIndex][section] = [
       ...(newGame.storyline[safeLevelIndex][section] ?? []),
-      { speaker: "", text: "" },
+      { speakerId: "", text: "" },
     ];
     setGame(newGame);
   }
@@ -176,14 +188,21 @@ export default function StorylineEditor({ game, setGame, onClose }) {
                               key={`${section}-${i}`}
                               className="flex flex-col md:flex-row gap-2 md:items-center"
                             >
-                              <input
-                                placeholder="Speaker"
-                                value={dialogue?.speaker ?? ""}
+                              {/* Speaker dropdown */}
+                              <select
+                                value={dialogue?.speakerId ?? ""}
                                 onChange={(e) =>
-                                  updateDialogue(section, i, "speaker", e.target.value)
+                                  updateDialogue(section, i, "speakerId", e.target.value)
                                 }
-                                className={`${inputClass} md:w-44`}
-                              />
+                                className={`${inputClass} md:w-56`}
+                              >
+                                <option value="">Select speaker…</option>
+                                {speakerOptions.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.name}
+                                  </option>
+                                ))}
+                              </select>
 
                               <input
                                 placeholder="Dialogue"
@@ -207,6 +226,13 @@ export default function StorylineEditor({ game, setGame, onClose }) {
                           ))}
                         </div>
                       )}
+
+                      {/* Optional hint */}
+                      {speakerOptions.length === 0 ? (
+                        <div className="mt-3 text-xs text-gray-500">
+                          Add speaker images in the Game Editor to enable the dropdown.
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}

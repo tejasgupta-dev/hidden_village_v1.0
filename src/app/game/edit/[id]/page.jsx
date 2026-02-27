@@ -15,6 +15,17 @@ function asArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
+function safeId(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+const MAX_SPEAKER_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
 export default function GameEditor() {
   const pathname = usePathname();
   const router = useRouter();
@@ -33,16 +44,129 @@ export default function GameEditor() {
     handleSave,
     handleDelete,
     getStoredPin,
+    uploadAsset, // ✅ from hook
   } = useGameEditor(id, false, user?.email);
 
   // UI state
   const [showStorylineEditor, setShowStorylineEditor] = useState(false);
   const [expandedLevel, setExpandedLevel] = useState(null);
 
+  // Speaker uploader UI
+  const [speakerName, setSpeakerName] = useState("");
+  const [speakerFile, setSpeakerFile] = useState(null);
+  const [uploadingSpeaker, setUploadingSpeaker] = useState(false);
+
   const handleBack = () => router.push("/");
 
   const patchGame = (patch) => {
     setGame((prev) => ({ ...(prev ?? {}), ...(patch ?? {}) }));
+  };
+
+  const patchSettings = (patch) => {
+    setGame((prev) => ({
+      ...(prev ?? {}),
+      settings: {
+        ...((prev ?? {}).settings ?? {}),
+        ...(patch ?? {}),
+      },
+    }));
+  };
+
+  const speakersMap = useMemo(() => {
+    return (game?.settings?.speakers && typeof game.settings.speakers === "object")
+      ? game.settings.speakers
+      : {};
+  }, [game?.settings?.speakers]);
+
+  const speakersList = useMemo(() => {
+    return Object.values(speakersMap).sort((a, b) =>
+      String(a?.name || "").localeCompare(String(b?.name || ""))
+    );
+  }, [speakersMap]);
+
+  const removeSpeaker = (speakerId) => {
+    setGame((prev) => {
+      const prevSpeakers = prev?.settings?.speakers || {};
+      const nextSpeakers = { ...prevSpeakers };
+      delete nextSpeakers[speakerId];
+
+      // Optional: you could also scrub storyline references here if you want.
+      return {
+        ...(prev ?? {}),
+        settings: {
+          ...(prev?.settings ?? {}),
+          speakers: nextSpeakers,
+        },
+      };
+    });
+  };
+
+  const handleUploadSpeaker = async () => {
+    if (!game?.id) {
+      alert("Save the game first before uploading speaker images.");
+      return;
+    }
+
+    const name = speakerName.trim();
+    const idSlug = safeId(name);
+
+    if (!name) {
+      alert("Enter a speaker name.");
+      return;
+    }
+    if (!idSlug) {
+      alert("Speaker name is invalid.");
+      return;
+    }
+    if (!speakerFile) {
+      alert("Choose an image file.");
+      return;
+    }
+
+    if (speakersMap[idSlug]) {
+      alert("That speaker name already exists in this game. Choose a different name.");
+      return;
+    }
+
+    if (speakerFile.size > MAX_SPEAKER_IMAGE_BYTES) {
+      alert("Image too large. Max size is 5MB.");
+      return;
+    }
+
+    if (speakerFile.type && !ALLOWED_IMAGE_TYPES.has(speakerFile.type)) {
+      alert("Unsupported image type. Use png/jpg/webp/gif.");
+      return;
+    }
+
+    setUploadingSpeaker(true);
+    try {
+      // Upload to game storage
+      const res = await uploadAsset(speakerFile, { kind: "speakers" });
+      if (!res?.success || !res?.path) throw new Error("Upload failed");
+
+      // Store inside game.settings.speakers
+      const createdAt = Date.now();
+      patchSettings({
+        speakers: {
+          ...(game?.settings?.speakers ?? {}),
+          [idSlug]: {
+            id: idSlug,
+            name,
+            path: res.path, // ✅ stable storage path
+            createdAt,
+          },
+        },
+      });
+
+      // clear inputs
+      setSpeakerName("");
+      setSpeakerFile(null);
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || "Failed to upload speaker image");
+    } finally {
+      setUploadingSpeaker(false);
+    }
   };
 
   /* ------------------ SAFE MEMO VALUES (ABOVE EARLY RETURNS) ------------------ */
@@ -121,7 +245,7 @@ export default function GameEditor() {
         <div />
       </div>
 
-      {/* GAME INFO (PIN now lives INSIDE this component) */}
+      {/* GAME INFO */}
       <div className="bg-white p-5 rounded border space-y-4">
         <GameBasicsForm
           game={game}
@@ -130,6 +254,64 @@ export default function GameEditor() {
           getStoredPin={getStoredPin}
           onChange={(patch) => patchGame(patch)}
         />
+      </div>
+
+      {/* SPEAKER IMAGES */}
+      <div className="bg-white p-5 rounded border space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-gray-900">Speaker Images</h2>
+          <div className="text-xs text-gray-500">Max 5MB • Unique names</div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <input
+            value={speakerName}
+            onChange={(e) => setSpeakerName(e.target.value)}
+            placeholder="Speaker name (e.g., Guide)"
+            className="border rounded px-3 py-2"
+            disabled={savingGame || uploadingSpeaker}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setSpeakerFile(e.target.files?.[0] || null)}
+            className="border rounded px-3 py-2"
+            disabled={savingGame || uploadingSpeaker}
+          />
+          <button
+            type="button"
+            onClick={handleUploadSpeaker}
+            disabled={savingGame || uploadingSpeaker}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {uploadingSpeaker ? "Uploading..." : "Upload speaker"}
+          </button>
+        </div>
+
+        {speakersList.length === 0 ? (
+          <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-4">
+            No speaker images yet.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {speakersList.map((s) => (
+              <div key={s.id} className="border rounded-lg p-3 flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-900">{s.name}</div>
+                  <div className="text-xs text-gray-500 truncate">{s.path}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeSpeaker(s.id)}
+                  className="text-red-600 hover:text-red-800 text-sm"
+                  disabled={savingGame}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* LEVELS */}

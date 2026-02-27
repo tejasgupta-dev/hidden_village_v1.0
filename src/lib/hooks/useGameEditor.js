@@ -180,7 +180,15 @@ export function useGameEditor(id, isNew = false, userEmail) {
       loadInFlightRef.current = false;
       setLoadingGame(false);
     }
-  }, [id, isNew, router, userEmail, getStoredPin, setStoredPin, clearStoredPin]);
+  }, [
+    id,
+    isNew,
+    router,
+    userEmail,
+    getStoredPin,
+    setStoredPin,
+    clearStoredPin,
+  ]);
 
   /* ------------------ SAVE GAME ------------------ */
   const handleSave = useCallback(
@@ -209,7 +217,11 @@ export function useGameEditor(id, isNew = false, userEmail) {
           const authPin = getStoredPin(id);
           const opts = authPin ? { pin: authPin } : undefined;
 
-          response = await gameEditor.save(game.id, { ...game, isPublished: publish }, opts);
+          response = await gameEditor.save(
+            game.id,
+            { ...game, isPublished: publish },
+            opts
+          );
 
           if (!response?.success) throw new Error("Save failed");
 
@@ -232,6 +244,21 @@ export function useGameEditor(id, isNew = false, userEmail) {
       }
     },
     [game, id, isNew, router, getStoredPin, setStoredPin, clearStoredPin]
+  );
+
+  /* ------------------ UPLOAD ASSET ------------------ */
+  const uploadAsset = useCallback(
+    async (file, options = {}) => {
+      if (!id && !game?.id) throw new Error("Game ID is required to upload assets");
+
+      const gameId = game?.id || id;
+
+      const authPin = getStoredPin(gameId);
+      const opts = authPin ? { pin: authPin, ...options } : { ...options };
+
+      return gameEditor.uploadAsset(gameId, file, opts);
+    },
+    [id, game?.id, getStoredPin]
   );
 
   /* ------------------ DELETE GAME ------------------ */
@@ -287,11 +314,14 @@ export function useGameEditor(id, isNew = false, userEmail) {
     loadGame,
     handleSave,
     handleDelete,
+    uploadAsset,
+
     addLevel,
     removeLevel,
+
     getLevelData: (levelId) =>
       allAvailableLevels[levelId] || { id: levelId, name: "", description: "" },
 
-    getStoredPin: () => getStoredPin(id),
+    getStoredPin: () => getStoredPin(id || game?.id),
   };
 }

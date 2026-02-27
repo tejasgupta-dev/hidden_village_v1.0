@@ -119,6 +119,37 @@ export const gamesApi = {
   getLevel(gameId, levelId) {
     return apiClient(`/api/games/${gameId}/levels/${levelId}`);
   },
+
+  /**
+   * Upload a game asset (image)
+   * Route: POST /api/games/:id/uploads
+   *
+   * @param {string} gameId
+   * @param {File} file
+   * @param {Object} options
+   * @param {string} options.pin - optional game PIN (sent in header)
+   * @param {string} options.kind - optional folder grouping (e.g. "dialogue", "avatar", "background")
+   * @returns {Promise<{success: boolean, path: string, url?: string}>}
+   */
+  uploadAsset(gameId, file, options = {}) {
+    const { pin, kind = "misc" } = options;
+
+    const headers = {};
+    if (pin) headers["x-game-pin"] = pin;
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("kind", kind);
+
+    // NOTE: apiClient must support FormData bodies (i.e., don't force JSON headers)
+    return apiClient(`/api/games/${gameId}/uploads`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: form,
+    });
+  },
+
 };
 
 export default gamesApi;
