@@ -28,6 +28,22 @@ function safeId(name) {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
+function SpritePreview({ url, alt }) {
+  if (!url) {
+    // Minimal placeholder, no box
+    return <div className="text-xs text-gray-400 select-none">—</div>;
+  }
+
+  return (
+    <img
+      src={url}
+      alt={alt}
+      className="h-10 w-auto max-w-[80px] object-contain"
+      draggable={false}
+    />
+  );
+}
+
 export default function GameEditor() {
   const pathname = usePathname();
   const router = useRouter();
@@ -157,8 +173,6 @@ export default function GameEditor() {
     }
 
     try {
-      // Upload to /games/[id]/sprites (type=speaker, name=...)
-      // Your hook’s uploadSprite should post FormData: file + type + name.
       const res = await uploadSprite(speakerFile, { type: "speaker", name });
 
       if (!res?.success || !res?.sprite?.url) {
@@ -175,8 +189,8 @@ export default function GameEditor() {
           [idSlug]: {
             id: idSlug,
             name,
-            url,  // ✅ runtime + UI uses this
-            path, // optional
+            url, // runtime + UI uses this
+            path,
             createdAt,
           },
         },
@@ -219,14 +233,8 @@ export default function GameEditor() {
       const newLevelIds = [...(prev.levelIds || [])];
       const newStoryline = [...(prev.storyline || [])];
 
-      [newLevelIds[index], newLevelIds[newIndex]] = [
-        newLevelIds[newIndex],
-        newLevelIds[index],
-      ];
-      [newStoryline[index], newStoryline[newIndex]] = [
-        newStoryline[newIndex],
-        newStoryline[index],
-      ];
+      [newLevelIds[index], newLevelIds[newIndex]] = [newLevelIds[newIndex], newLevelIds[index]];
+      [newStoryline[index], newStoryline[newIndex]] = [newStoryline[newIndex], newStoryline[index]];
 
       return { ...prev, levelIds: newLevelIds, storyline: newStoryline };
     });
@@ -300,15 +308,7 @@ export default function GameEditor() {
                   className="border rounded-lg p-3 flex items-center justify-between gap-3"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    {s.url ? (
-                      <img
-                        src={s.url}
-                        alt={s.name}
-                        className="h-12 w-12 rounded-xl object-cover ring-1 ring-gray-200"
-                      />
-                    ) : (
-                      <div className="h-12 w-12 rounded-xl bg-gray-100 ring-1 ring-gray-200" />
-                    )}
+                    <SpritePreview url={s.url} alt={s.name} />
 
                     <div className="min-w-0">
                       <div className="font-medium text-gray-900">{s.name}</div>
@@ -332,14 +332,14 @@ export default function GameEditor() {
               value={speakerName}
               onChange={(e) => setSpeakerName(e.target.value)}
               placeholder="Speaker name (e.g., Guide)"
-              className="border rounded px-3 py-2"
+              className="border rounded px-3 py-2 bg-white text-black placeholder:text-gray-500"
               disabled={savingGame || uploadingSprite}
             />
             <input
               type="file"
               accept="image/*"
               onChange={(e) => setSpeakerFile(e.target.files?.[0] || null)}
-              className="border rounded px-3 py-2"
+              className="border rounded px-3 py-2 bg-white text-black file:text-black file:bg-gray-100 file:border-0 file:rounded file:px-3 file:py-1 file:mr-3"
               disabled={savingGame || uploadingSprite}
             />
             <button
@@ -369,15 +369,7 @@ export default function GameEditor() {
                   className="border rounded-lg p-3 flex items-center justify-between gap-3"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    {s.url ? (
-                      <img
-                        src={s.url}
-                        alt={s.name}
-                        className="h-12 w-12 rounded-xl object-cover ring-1 ring-gray-200"
-                      />
-                    ) : (
-                      <div className="h-12 w-12 rounded-xl bg-gray-100 ring-1 ring-gray-200" />
-                    )}
+                    <SpritePreview url={s.url} alt={s.name} />
 
                     <div className="min-w-0">
                       <div className="font-medium text-gray-900">{s.name}</div>
@@ -443,9 +435,7 @@ export default function GameEditor() {
                         {levelData.name || levelId}
                       </span>
                       {levelData.name && (
-                        <span className="ml-2 text-xs text-gray-500">
-                          ({levelId})
-                        </span>
+                        <span className="ml-2 text-xs text-gray-500">({levelId})</span>
                       )}
                     </div>
 
@@ -457,9 +447,7 @@ export default function GameEditor() {
                           moveLevel(index, -1);
                         }}
                         className={`cursor-pointer ${
-                          index === 0
-                            ? "opacity-30 pointer-events-none"
-                            : "hover:text-blue-600"
+                          index === 0 ? "opacity-30 pointer-events-none" : "hover:text-blue-600"
                         }`}
                       />
                       <MoveDown

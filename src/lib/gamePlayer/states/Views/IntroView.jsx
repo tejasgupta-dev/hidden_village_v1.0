@@ -4,18 +4,19 @@ import { useMemo } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
 import { DEFAULT_SPEAKERS } from "@/lib/assets/defaultSprites";
 
-function DefaultSpeakerSprite({ label = "G" }) {
-  return (
-    <div className="h-28 w-28 rounded-3xl bg-white/10 ring-1 ring-white/20 flex items-center justify-center">
-      <div className="h-16 w-16 rounded-full bg-white/15 flex items-center justify-center text-white/80 font-semibold text-xl">
-        {label}
-      </div>
-    </div>
-  );
-}
-
 function isPlainObject(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Natural fallback sprite (no square container)
+ */
+function DefaultSpeakerSprite({ label = "G" }) {
+  return (
+    <div className="text-white/80 font-semibold text-5xl select-none">
+      {label}
+    </div>
+  );
 }
 
 export default function IntroView({ session, node, dispatch }) {
@@ -25,12 +26,18 @@ export default function IntroView({ session, node, dispatch }) {
   }, [node]);
 
   const idx = session?.dialogueIndex ?? 0;
-
   const rawLine = lines[idx] ?? "";
+
   const line =
-    typeof rawLine === "object" && rawLine !== null ? rawLine.text ?? "" : rawLine;
+    typeof rawLine === "object" && rawLine !== null
+      ? rawLine.text ?? ""
+      : rawLine;
 
   const showCursor = !!session?.flags?.showCursor;
+
+  /* -------------------------------------------------------
+     SPEAKER RESOLUTION (CUSTOM + DEFAULT)
+  ------------------------------------------------------- */
 
   const { speakerName, avatarUrl } = useMemo(() => {
     let speakerId = null;
@@ -45,8 +52,10 @@ export default function IntroView({ session, node, dispatch }) {
       }
     }
 
+    // 1️⃣ Custom speakers from game settings
     const customMap =
-      session?.game?.settings?.speakers && isPlainObject(session.game.settings.speakers)
+      session?.game?.settings?.speakers &&
+      isPlainObject(session.game.settings.speakers)
         ? session.game.settings.speakers
         : {};
 
@@ -57,7 +66,10 @@ export default function IntroView({ session, node, dispatch }) {
       };
     }
 
-    const defaultSpeaker = DEFAULT_SPEAKERS?.find((s) => s.id === speakerId) ?? null;
+    // 2️⃣ Default speaker set
+    const defaultSpeaker =
+      DEFAULT_SPEAKERS?.find((s) => s.id === speakerId) ?? null;
+
     if (defaultSpeaker) {
       return {
         speakerName: defaultSpeaker.name,
@@ -65,38 +77,59 @@ export default function IntroView({ session, node, dispatch }) {
       };
     }
 
+    // 3️⃣ Fallback
     return {
-      speakerName: (typeof rawLine === "object" && rawLine?.speakerName) || node?.speaker?.name || "Guide",
+      speakerName:
+        (typeof rawLine === "object" && rawLine?.speakerName) ||
+        node?.speaker?.name ||
+        "Guide",
       avatarUrl: null,
     };
   }, [rawLine, node?.speaker?.name, session?.game?.settings?.speakers]);
 
   const onNext = () => dispatch(commands.next());
 
+  /* -------------------------------------------------------
+     RENDER
+  ------------------------------------------------------- */
+
   return (
     <div className="absolute inset-0 z-20 pointer-events-auto">
+      {/* Soft background dim */}
       <div className="absolute inset-0 bg-black/30" />
 
+      {/* Dialogue container */}
       <div className="absolute left-0 right-0 bottom-0 p-8">
         <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
-          <div className="flex gap-8 items-end">
-            <div className="shrink-0">
+          <div className="flex gap-10 items-end">
+            
+            {/* Speaker */}
+            <div className="shrink-0 flex flex-col items-center">
               {avatarUrl ? (
                 <img
                   src={avatarUrl}
                   alt={speakerName}
-                  className="h-28 w-28 rounded-3xl object-cover ring-1 ring-white/20"
+                  className="h-40 w-auto max-w-[240px] object-contain select-none"
+                  draggable={false}
                 />
               ) : (
-                <DefaultSpeakerSprite label={String(speakerName || "G").charAt(0).toUpperCase()} />
+                <DefaultSpeakerSprite
+                  label={String(speakerName || "G").charAt(0).toUpperCase()}
+                />
               )}
-              <div className="mt-3 text-sm text-white/70 text-center">{speakerName}</div>
+
+              <div className="mt-3 text-sm text-white/70 text-center">
+                {speakerName}
+              </div>
             </div>
 
+            {/* Dialogue Text */}
             <div className="flex-1 min-w-0">
               <div
                 className="text-white/95 leading-relaxed"
-                style={{ fontSize: session?.settings?.ui?.dialogueFontSize ?? 22 }}
+                style={{
+                  fontSize: session?.settings?.ui?.dialogueFontSize ?? 22,
+                }}
               >
                 {line || (lines.length ? "…" : "No intro lines provided.")}
               </div>
@@ -108,6 +141,7 @@ export default function IntroView({ session, node, dispatch }) {
               )}
             </div>
 
+            {/* Next Button */}
             <div className="shrink-0 flex flex-col items-end gap-4">
               <div className="p-4">
                 <button
@@ -130,9 +164,12 @@ export default function IntroView({ session, node, dispatch }) {
               </div>
 
               <div className="text-xs text-white/50">
-                {showCursor ? "Click or hover to continue" : "Please wait…"}
+                {showCursor
+                  ? "Click or hover to continue"
+                  : "Please wait…"}
               </div>
             </div>
+
           </div>
         </div>
       </div>
