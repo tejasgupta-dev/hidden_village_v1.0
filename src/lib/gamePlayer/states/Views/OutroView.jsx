@@ -2,15 +2,20 @@
 
 import { useMemo } from "react";
 import { commands } from "@/lib/gamePlayer/session/commands";
+import { DEFAULT_SPEAKERS } from "@/lib/assets/defaultSprites";
 
-function DefaultSpeakerSprite() {
+function DefaultSpeakerSprite({ label = "G" }) {
   return (
     <div className="h-28 w-28 rounded-3xl bg-white/10 ring-1 ring-white/20 flex items-center justify-center">
       <div className="h-16 w-16 rounded-full bg-white/15 flex items-center justify-center text-white/80 font-semibold text-xl">
-        G
+        {label}
       </div>
     </div>
   );
+}
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
 export default function OutroView({ session, node, dispatch }) {
@@ -21,32 +26,64 @@ export default function OutroView({ session, node, dispatch }) {
 
   const idx = session?.dialogueIndex ?? 0;
 
-  // Support both string lines AND { text, speaker } objects
   const rawLine = lines[idx] ?? "";
   const line =
     typeof rawLine === "object" && rawLine !== null ? rawLine.text ?? "" : rawLine;
 
   const showCursor = !!session?.flags?.showCursor;
 
-  const speakerName =
-    typeof rawLine === "object" && rawLine?.speaker
-      ? rawLine.speaker
-      : node?.speaker?.name ?? "Guide";
+  const { speakerName, avatarUrl } = useMemo(() => {
+    let speakerId = null;
 
-  const avatarUrl = node?.speaker?.avatarUrl ?? null;
+    if (typeof rawLine === "object" && rawLine !== null) {
+      if (rawLine.speakerId) {
+        speakerId = String(rawLine.speakerId);
+      } else if (typeof rawLine.speaker === "object" && rawLine.speaker?.id) {
+        speakerId = String(rawLine.speaker.id);
+      } else if (typeof rawLine.speaker === "string") {
+        speakerId = String(rawLine.speaker);
+      }
+    }
+
+    const customMap =
+      session?.game?.settings?.speakers && isPlainObject(session.game.settings.speakers)
+        ? session.game.settings.speakers
+        : {};
+
+    if (speakerId && customMap[speakerId]) {
+      return {
+        speakerName: customMap[speakerId]?.name ?? speakerId,
+        avatarUrl: customMap[speakerId]?.url ?? null,
+      };
+    }
+
+    const defaultSpeaker = DEFAULT_SPEAKERS?.find((s) => s.id === speakerId) ?? null;
+    if (defaultSpeaker) {
+      return {
+        speakerName: defaultSpeaker.name,
+        avatarUrl: defaultSpeaker.url ?? null,
+      };
+    }
+
+    // Fallback to node speaker or "Guide"
+    return {
+      speakerName:
+        (typeof rawLine === "object" && rawLine?.speakerName) ||
+        node?.speaker?.name ||
+        "Guide",
+      avatarUrl: null,
+    };
+  }, [rawLine, node?.speaker?.name, session?.game?.settings?.speakers]);
 
   const onNext = () => dispatch(commands.next());
 
   return (
     <div className="absolute inset-0 z-20 pointer-events-auto">
-      {/* Subtle background overlay */}
       <div className="absolute inset-0 bg-black/30" />
 
-      {/* Bottom dialogue bar */}
       <div className="absolute left-0 right-0 bottom-0 p-8">
         <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
           <div className="flex gap-8 items-end">
-            {/* Speaker sprite */}
             <div className="shrink-0">
               {avatarUrl ? (
                 <img
@@ -55,20 +92,15 @@ export default function OutroView({ session, node, dispatch }) {
                   className="h-28 w-28 rounded-3xl object-cover ring-1 ring-white/20"
                 />
               ) : (
-                <DefaultSpeakerSprite />
+                <DefaultSpeakerSprite label={String(speakerName || "G").charAt(0).toUpperCase()} />
               )}
-              <div className="mt-3 text-sm text-white/70 text-center">
-                {speakerName}
-              </div>
+              <div className="mt-3 text-sm text-white/70 text-center">{speakerName}</div>
             </div>
 
-            {/* Dialogue text */}
             <div className="flex-1 min-w-0">
               <div
                 className="text-white/95 leading-relaxed"
-                style={{
-                  fontSize: session.settings?.ui?.dialogueFontSize ?? 22,
-                }}
+                style={{ fontSize: session?.settings?.ui?.dialogueFontSize ?? 22 }}
               >
                 {line || (lines.length ? "…" : "No outro lines provided.")}
               </div>
@@ -80,7 +112,6 @@ export default function OutroView({ session, node, dispatch }) {
               )}
             </div>
 
-            {/* Next button (mouse click or PoseCursor hover triggers DOM click) */}
             <div className="shrink-0 flex flex-col items-end gap-4">
               <div className="p-4">
                 <button

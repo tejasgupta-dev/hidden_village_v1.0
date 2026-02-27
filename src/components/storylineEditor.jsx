@@ -2,8 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
+import { DEFAULT_SPEAKERS } from "@/lib/assets/defaultSprites";
 
 const SECTIONS = ["intro", "outro"];
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
 
 export default function StorylineEditor({ game, setGame, onClose }) {
   const [levelIndex, setLevelIndex] = useState(0);
@@ -20,6 +25,73 @@ export default function StorylineEditor({ game, setGame, onClose }) {
     intro: [],
     outro: [],
   };
+
+  // Custom speakers stored on the game (uploaded/created)
+  // Supports BOTH:
+  //  - settings.speakers: { [id]: {id,name,url,path,...} }
+  //  - settings.speakerById + settings.speakerUrlById (if you switch later)
+  const customSpeakersMap = useMemo(() => {
+    const s = game?.settings ?? {};
+    if (isPlainObject(s.speakers)) return s.speakers;
+
+    // Optional alt shape support
+    if (isPlainObject(s.speakerById)) {
+      const urlById = isPlainObject(s.speakerUrlById) ? s.speakerUrlById : {};
+      const out = {};
+      for (const [id, meta] of Object.entries(s.speakerById)) {
+        const safeId = String(id || "").trim();
+        if (!safeId) continue;
+        out[safeId] = {
+          id: safeId,
+          name: meta?.name ?? safeId,
+          url: urlById?.[safeId] ?? meta?.url ?? null,
+        };
+      }
+      return out;
+    }
+
+    return {};
+  }, [game?.settings]);
+
+  // Merge defaults + custom (custom wins on id collision)
+  const mergedSpeakersMap = useMemo(() => {
+    const out = {};
+    for (const s of DEFAULT_SPEAKERS || []) {
+      const id = String(s?.id ?? "").trim();
+      const name = String(s?.name ?? "").trim();
+      const url = s?.url ?? null;
+      if (!id || !name) continue;
+      out[id] = { id, name, url, _isDefault: true };
+    }
+
+    for (const [id, s] of Object.entries(customSpeakersMap || {})) {
+      const sid = String(s?.id ?? id ?? "").trim();
+      const name = String(s?.name ?? "").trim();
+      if (!sid || !name) continue;
+      out[sid] = {
+        id: sid,
+        name,
+        url: s?.url ?? null,
+        path: s?.path ?? null,
+        createdAt: s?.createdAt ?? null,
+        _isDefault: false,
+      };
+    }
+
+    return out;
+  }, [customSpeakersMap]);
+
+  const speakerOptions = useMemo(() => {
+    return Object.values(mergedSpeakersMap)
+      .map((s) => ({
+        id: String(s.id),
+        name: String(s.name),
+        url: s.url ?? null,
+        isDefault: !!s._isDefault,
+      }))
+      .filter((s) => s.id && s.name)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [mergedSpeakersMap]);
 
   const inputClass =
     "border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900 " +
@@ -58,7 +130,7 @@ export default function StorylineEditor({ game, setGame, onClose }) {
     const newGame = ensureLevel(safeLevelIndex);
     newGame.storyline[safeLevelIndex][section] = [
       ...(newGame.storyline[safeLevelIndex][section] ?? []),
-      { speaker: "", text: "" },
+      { speakerId: "", text: "" },
     ];
     setGame(newGame);
   }
@@ -138,8 +210,15 @@ export default function StorylineEditor({ game, setGame, onClose }) {
                       title={id}
                     >
                       <span>Level {i + 1}</span>
-                      <span className={["ml-2 text-xs", active ? "opacity-80" : "text-gray-500"].join(" ")}>
-                        {String(id).length > 14 ? `${String(id).slice(0, 6)}…${String(id).slice(-6)}` : `(${id})`}
+                      <span
+                        className={[
+                          "ml-2 text-xs",
+                          active ? "opacity-80" : "text-gray-500",
+                        ].join(" ")}
+                      >
+                        {String(id).length > 14
+                          ? `${String(id).slice(0, 6)}…${String(id).slice(-6)}`
+                          : `(${id})`}
                       </span>
                     </button>
                   );
@@ -171,42 +250,81 @@ export default function StorylineEditor({ game, setGame, onClose }) {
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          {entries.map((dialogue, i) => (
-                            <div
-                              key={`${section}-${i}`}
-                              className="flex flex-col md:flex-row gap-2 md:items-center"
-                            >
-                              <input
-                                placeholder="Speaker"
-                                value={dialogue?.speaker ?? ""}
-                                onChange={(e) =>
-                                  updateDialogue(section, i, "speaker", e.target.value)
-                                }
-                                className={`${inputClass} md:w-44`}
-                              />
+                          {entries.map((dialogue, i) => {
+                            // Back-compat: older lines might have speaker: {id} or speaker string.
+                            const valueForSelect =
+                              dialogue?.speakerId ??
+                              (typeof dialogue?.speaker === "object" && dialogue?.speaker?.id
+                                ? dialogue.speaker.id
+                                : "");
 
-                              <input
-                                placeholder="Dialogue"
-                                value={dialogue?.text ?? ""}
-                                onChange={(e) =>
-                                  updateDialogue(section, i, "text", e.target.value)
-                                }
-                                className={`${inputClass} flex-1`}
-                              />
-
-                              <button
-                                type="button"
-                                onClick={() => removeDialogue(section, i)}
-                                className="p-2 rounded-lg hover:bg-red-50 text-red-600 self-start md:self-auto"
-                                title="Remove line"
-                                aria-label="Remove line"
+                            return (
+                              <div
+                                key={`${section}-${i}`}
+                                className="flex flex-col md:flex-row gap-2 md:items-center"
                               >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          ))}
+                                {/* Speaker dropdown */}
+                                <select
+                                  value={valueForSelect}
+                                  onChange={(e) =>
+                                    updateDialogue(section, i, "speakerId", e.target.value)
+                                  }
+                                  className={`${inputClass} md:w-56`}
+                                >
+                                  <option value="">Select speaker…</option>
+
+                                  {/* Defaults first */}
+                                  <optgroup label="Default">
+                                    {speakerOptions
+                                      .filter((s) => s.isDefault)
+                                      .map((s) => (
+                                        <option key={s.id} value={s.id}>
+                                          {s.name}
+                                        </option>
+                                      ))}
+                                  </optgroup>
+
+                                  {/* Custom second */}
+                                  <optgroup label="Custom">
+                                    {speakerOptions
+                                      .filter((s) => !s.isDefault)
+                                      .map((s) => (
+                                        <option key={s.id} value={s.id}>
+                                          {s.name}
+                                        </option>
+                                      ))}
+                                  </optgroup>
+                                </select>
+
+                                <input
+                                  placeholder="Dialogue"
+                                  value={dialogue?.text ?? ""}
+                                  onChange={(e) =>
+                                    updateDialogue(section, i, "text", e.target.value)
+                                  }
+                                  className={`${inputClass} flex-1`}
+                                />
+
+                                <button
+                                  type="button"
+                                  onClick={() => removeDialogue(section, i)}
+                                  className="p-2 rounded-lg hover:bg-red-50 text-red-600 self-start md:self-auto"
+                                  title="Remove line"
+                                  aria-label="Remove line"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
+
+                      {speakerOptions.length === 0 ? (
+                        <div className="mt-3 text-xs text-gray-500">
+                          No speakers available.
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}

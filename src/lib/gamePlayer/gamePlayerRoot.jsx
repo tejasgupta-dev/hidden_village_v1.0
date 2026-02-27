@@ -1,15 +1,19 @@
 "use client";
 
-import GamePlayerInner from "./gamePlayerInner";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWindowSize } from "@/lib/gamePlayer/runtime/useWindowSize";
+import GamePlayerInner from "./gamePlayerInner";
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-export default function GamePlayerRoot({ game, levelIndex = 0, deviceId = "web", onComplete }) {
+export default function GamePlayerRoot({
+  game,
+  levelIndex = 0,
+  deviceId = "web",
+  onComplete,
+}) {
   const { width, height } = useWindowSize(640, 480);
 
   const gameId = game?.id ?? null;
@@ -49,6 +53,7 @@ export default function GamePlayerRoot({ game, levelIndex = 0, deviceId = "web",
         const text = await res.text().catch(() => "");
         const msg = `Failed to create play (${res.status}): ${text}`;
 
+        // Retry auth transient failures
         if ((res.status === 401 || res.status === 403) && attempt < maxAttempts) {
           await sleep(250 * attempt);
           continue;
@@ -97,7 +102,8 @@ export default function GamePlayerRoot({ game, levelIndex = 0, deviceId = "web",
         <button
           type="button"
           onClick={() => {
-            createdOnceRef.current = true;
+            // allow retry even if strict-mode already ran
+            createdOnceRef.current = false;
             void createPlay();
           }}
           className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 ring-1 ring-white/20"

@@ -300,9 +300,13 @@ export default function GamePlayerInner({
     dispatch(commands.consumeEffects());
   }, [session.effects, onComplete, playId, session]);
 
+  // IMPORTANT: use session.levelIndex (reducer may advance levels)
+  const activeLevelIndex = Number.isFinite(Number(session?.levelIndex)) ? session.levelIndex : levelIndex;
+  const level = game?.levels?.[activeLevelIndex];
+
   const type = normalizeStateType(session.node?.type ?? session.node?.state ?? null);
 
-  // live pose for the drawer (overlay, but no box)
+  // live pose for the drawer
   const poseForDrawer = usePoseDrawerPose(poseDataRef);
 
   // Dialogue overlay (for intro/outro)
@@ -320,8 +324,7 @@ export default function GamePlayerInner({
   })();
 
   // Similarity overlays only during POSE_MATCH
-  const similarityScores =
-    type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
+  const similarityScores = type === STATE_TYPES.POSE_MATCH ? session.poseMatch?.perSegment ?? [] : [];
 
   return (
     <div className="relative w-full h-screen bg-gray-950 overflow-hidden">
@@ -331,12 +334,16 @@ export default function GamePlayerInner({
       {/* Hidden preview used for camera+mic recording */}
       <video ref={cameraPreviewRef} style={{ display: "none" }} playsInline muted />
 
-      {/* ✅ Common background (public/assets/bg.jpg) */}
+      {/* Background: level background if present, else fallback */}
       <div className="absolute inset-0">
-        <img src="/assets/bg.jpg" alt="" className="w-full h-full object-cover opacity-90" />
+        {level?.background ? (
+          <img src={level.background} alt="" className="w-full h-full object-cover opacity-90" />
+        ) : (
+          <img src="/assets/bg.jpg" alt="" className="w-full h-full object-cover opacity-90" />
+        )}
       </div>
 
-      {/* ✅ Main game (full width) */}
+      {/* Main game (full width) */}
       <div className="absolute inset-0">
         <StateRenderer
           session={session}
@@ -344,11 +351,13 @@ export default function GamePlayerInner({
           poseDataRef={poseDataRef}
           width={width}
           height={height}
+          game={game}
           dialogueText={dialogueText}
           speaker={speaker}
         />
       </div>
 
+      {/* Pose drawer overlay */}
       <div className="absolute right-0 top-60 z-[55] pointer-events-none w-1/3 h-screen">
         <PoseDrawer
           poseData={poseForDrawer}

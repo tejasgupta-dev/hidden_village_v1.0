@@ -2,15 +2,23 @@ export async function apiClient(url, options = {}) {
   try {
     const {
       headers: customHeaders = {},
+      body,
       ...rest
     } = options;
 
+    const headers = { ...customHeaders };
+
+    // Only set JSON header if body is NOT FormData
+    const isFormData = body instanceof FormData;
+
+    if (!isFormData && body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+
     const res = await fetch(url, {
       ...rest,
-      headers: {
-        "Content-Type": "application/json",
-        ...customHeaders,
-      },
+      body,
+      headers,
     });
 
     const data = await res.json().catch(() => ({}));

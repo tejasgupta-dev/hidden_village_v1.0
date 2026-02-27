@@ -11,9 +11,22 @@ import StorylineEditor from "@/components/storylineEditor";
 import GameBasicsForm from "@/components/game/GameBasicsForm";
 import GameLevelsPicker from "@/components/game/GameLevelsPicker";
 
+import { DEFAULT_SPEAKERS } from "@/lib/assets/defaultSprites";
+
 function asArray(v) {
   return Array.isArray(v) ? v : [];
 }
+
+function safeId(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 export default function GameEditor() {
   const pathname = usePathname();
@@ -33,16 +46,148 @@ export default function GameEditor() {
     handleSave,
     handleDelete,
     getStoredPin,
+
+    // sprite upload hook entrypoint (your hook has this)
+    uploadSprite,
+    uploadingSprite,
   } = useGameEditor(id, false, user?.email);
 
   // UI state
   const [showStorylineEditor, setShowStorylineEditor] = useState(false);
   const [expandedLevel, setExpandedLevel] = useState(null);
 
+  // Custom speaker uploader UI
+  const [speakerName, setSpeakerName] = useState("");
+  const [speakerFile, setSpeakerFile] = useState(null);
+
   const handleBack = () => router.push("/");
 
   const patchGame = (patch) => {
     setGame((prev) => ({ ...(prev ?? {}), ...(patch ?? {}) }));
+  };
+
+  const patchSettings = (patch) => {
+    setGame((prev) => ({
+      ...(prev ?? {}),
+      settings: {
+        ...((prev ?? {}).settings ?? {}),
+        ...(patch ?? {}),
+      },
+    }));
+  };
+
+  const customSpeakersMap = useMemo(() => {
+    const s = game?.settings?.speakers;
+    return s && typeof s === "object" ? s : {};
+  }, [game?.settings?.speakers]);
+
+  const customSpeakersList = useMemo(() => {
+    return Object.values(customSpeakersMap)
+      .filter((x) => x && typeof x === "object" && x.id && x.name)
+      .sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
+  }, [customSpeakersMap]);
+
+  const defaultSpeakersList = useMemo(() => {
+    return (DEFAULT_SPEAKERS || [])
+      .map((s) => ({
+        id: String(s?.id ?? "").trim(),
+        name: String(s?.name ?? "").trim(),
+        url: s?.url ?? null,
+      }))
+      .filter((s) => s.id && s.name)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, []);
+
+  const removeCustomSpeaker = (speakerId) => {
+    setGame((prev) => {
+      const prevSpeakers = prev?.settings?.speakers || {};
+      const nextSpeakers = { ...prevSpeakers };
+      delete nextSpeakers[speakerId];
+
+      return {
+        ...(prev ?? {}),
+        settings: {
+          ...(prev?.settings ?? {}),
+          speakers: nextSpeakers,
+        },
+      };
+    });
+  };
+
+  const handleUploadCustomSpeaker = async () => {
+    if (!game?.id) {
+      alert("Save the game first before uploading speaker images.");
+      return;
+    }
+
+    const name = speakerName.trim();
+    const idSlug = safeId(name);
+
+    if (!name) {
+      alert("Enter a speaker name.");
+      return;
+    }
+    if (!idSlug) {
+      alert("Speaker name is invalid.");
+      return;
+    }
+    if (!speakerFile) {
+      alert("Choose an image file.");
+      return;
+    }
+
+    // Prevent collision with defaults or existing customs
+    const defaultIds = new Set((DEFAULT_SPEAKERS || []).map((s) => String(s?.id ?? "").trim()));
+    if (defaultIds.has(idSlug)) {
+      alert("That name conflicts with a default speaker. Choose a different name.");
+      return;
+    }
+    if (customSpeakersMap[idSlug]) {
+      alert("That speaker already exists in this game. Choose a different name.");
+      return;
+    }
+
+    if (speakerFile.size > MAX_IMAGE_BYTES) {
+      alert("Image too large. Max size is 5MB.");
+      return;
+    }
+    if (speakerFile.type && !ALLOWED_IMAGE_TYPES.has(speakerFile.type)) {
+      alert("Unsupported image type. Use png/jpg/webp/gif.");
+      return;
+    }
+
+    try {
+      // Upload to /games/[id]/sprites (type=speaker, name=...)
+      // Your hook’s uploadSprite should post FormData: file + type + name.
+      const res = await uploadSprite(speakerFile, { type: "speaker", name });
+
+      if (!res?.success || !res?.sprite?.url) {
+        throw new Error(res?.message || "Upload failed");
+      }
+
+      const createdAt = Date.now();
+      const url = res.sprite.url;
+      const path = res.sprite.path ?? null;
+
+      patchSettings({
+        speakers: {
+          ...(game?.settings?.speakers ?? {}),
+          [idSlug]: {
+            id: idSlug,
+            name,
+            url,  // ✅ runtime + UI uses this
+            path, // optional
+            createdAt,
+          },
+        },
+      });
+
+      setSpeakerName("");
+      setSpeakerFile(null);
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || "Failed to upload speaker image");
+    }
   };
 
   /* ------------------ SAFE MEMO VALUES (ABOVE EARLY RETURNS) ------------------ */
@@ -121,7 +266,7 @@ export default function GameEditor() {
         <div />
       </div>
 
-      {/* GAME INFO (PIN now lives INSIDE this component) */}
+      {/* GAME INFO */}
       <div className="bg-white p-5 rounded border space-y-4">
         <GameBasicsForm
           game={game}
@@ -130,6 +275,129 @@ export default function GameEditor() {
           getStoredPin={getStoredPin}
           onChange={(patch) => patchGame(patch)}
         />
+      </div>
+
+      {/* SPEAKERS */}
+      <div className="bg-white p-5 rounded border space-y-5">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-gray-900">Speakers</h2>
+          <div className="text-xs text-gray-500">Max 5MB • Defaults always available</div>
+        </div>
+
+        {/* Default speakers */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-gray-900">Default Speakers</div>
+
+          {defaultSpeakersList.length === 0 ? (
+            <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-4">
+              No default speakers configured.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {defaultSpeakersList.map((s) => (
+                <div
+                  key={s.id}
+                  className="border rounded-lg p-3 flex items-center justify-between gap-3"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {s.url ? (
+                      <img
+                        src={s.url}
+                        alt={s.name}
+                        className="h-12 w-12 rounded-xl object-cover ring-1 ring-gray-200"
+                      />
+                    ) : (
+                      <div className="h-12 w-12 rounded-xl bg-gray-100 ring-1 ring-gray-200" />
+                    )}
+
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900">{s.name}</div>
+                      <div className="text-xs text-gray-500 truncate">{s.id}</div>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-gray-500">Default</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Custom speaker uploader */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-gray-900">Upload Custom Speaker</div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              value={speakerName}
+              onChange={(e) => setSpeakerName(e.target.value)}
+              placeholder="Speaker name (e.g., Guide)"
+              className="border rounded px-3 py-2"
+              disabled={savingGame || uploadingSprite}
+            />
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => setSpeakerFile(e.target.files?.[0] || null)}
+              className="border rounded px-3 py-2"
+              disabled={savingGame || uploadingSprite}
+            />
+            <button
+              type="button"
+              onClick={handleUploadCustomSpeaker}
+              disabled={savingGame || uploadingSprite}
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+            >
+              {uploadingSprite ? "Uploading..." : "Upload speaker"}
+            </button>
+          </div>
+        </div>
+
+        {/* Custom speakers list */}
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-gray-900">Custom Speakers</div>
+
+          {customSpeakersList.length === 0 ? (
+            <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-4">
+              No custom speakers yet.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {customSpeakersList.map((s) => (
+                <div
+                  key={s.id}
+                  className="border rounded-lg p-3 flex items-center justify-between gap-3"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {s.url ? (
+                      <img
+                        src={s.url}
+                        alt={s.name}
+                        className="h-12 w-12 rounded-xl object-cover ring-1 ring-gray-200"
+                      />
+                    ) : (
+                      <div className="h-12 w-12 rounded-xl bg-gray-100 ring-1 ring-gray-200" />
+                    )}
+
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900">{s.name}</div>
+                      <div className="text-xs text-gray-500 truncate">{s.id}</div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeCustomSpeaker(s.id)}
+                    className="text-red-600 hover:text-red-800 text-sm"
+                    disabled={savingGame}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* LEVELS */}

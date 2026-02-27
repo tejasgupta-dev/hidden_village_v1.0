@@ -38,11 +38,36 @@ function normalizeDialogueLines(raw) {
   return arr
     .map((x) => {
       if (typeof x === "string") return { text: x };
-      if (x && typeof x === "object") return { speaker: x.speaker, text: x.text ?? "" };
+
+      if (x && typeof x === "object") {
+        const text = String(x.text ?? "").trim();
+        if (!text) return null;
+
+        // NEW preferred field
+        const speakerId =
+          typeof x.speakerId === "string" && x.speakerId.trim()
+            ? x.speakerId.trim()
+            : null;
+
+        // Legacy field support (some older content stored a speaker name string)
+        const speaker =
+          !speakerId && typeof x.speaker === "string" && x.speaker.trim()
+            ? x.speaker.trim()
+            : undefined;
+
+        // Return both for compatibility:
+        // - IntroView can prefer speakerId -> sprite map
+        // - Legacy UI can still show speaker name if present
+        const out = { text };
+        if (speakerId) out.speakerId = speakerId;
+        if (speaker) out.speaker = speaker;
+
+        return out;
+      }
+
       return null;
     })
-    .filter(Boolean)
-    .filter((x) => String(x.text ?? "").trim().length > 0);
+    .filter(Boolean);
 }
 
 function normalizeOptions(raw) {

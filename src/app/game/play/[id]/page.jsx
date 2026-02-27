@@ -20,14 +20,80 @@ function normalizeBool(v) {
   return v === true || v === "true";
 }
 
+function asObject(v) {
+  return isPlainObject(v) ? v : {};
+}
+
+/**
+ * Normalize speakers map to a predictable shape:
+ * settings.speakers = {
+ *   [speakerId]: { id, name, url?, path?, spriteId? }
+ * }
+ */
+function normalizeSpeakers(rawSpeakers) {
+  const src = asObject(rawSpeakers);
+  const out = {};
+
+  for (const [k, v] of Object.entries(src)) {
+    const speakerId = String(k || "").trim();
+    if (!speakerId) continue;
+
+    const s = isPlainObject(v) ? v : {};
+    out[speakerId] = {
+      id: String(s.id || speakerId),
+      name: typeof s.name === "string" ? s.name : speakerId,
+
+      // NEW sprite fields (preferred)
+      spriteId: typeof s.spriteId === "string" ? s.spriteId : undefined,
+      url: typeof s.url === "string" ? s.url : undefined,
+
+      // legacy field (if you still have it in old games)
+      path: typeof s.path === "string" ? s.path : undefined,
+
+      createdAt:
+        typeof s.createdAt === "number" && Number.isFinite(s.createdAt)
+          ? s.createdAt
+          : undefined,
+    };
+  }
+
+  return out;
+}
+
+/**
+ * Add convenient lookup maps to settings so player can render easily:
+ * - settings.speakerById
+ * - settings.speakerUrlById
+ */
+function normalizeGameSettings(rawSettings) {
+  const settings = asObject(rawSettings);
+
+  const speakers = normalizeSpeakers(settings.speakers);
+
+  const speakerById = {};
+  const speakerUrlById = {};
+
+  for (const [id, s] of Object.entries(speakers)) {
+    speakerById[id] = s;
+    if (s?.url) speakerUrlById[id] = s.url;
+  }
+
+  return {
+    ...settings,
+    speakers,
+    speakerById,
+    speakerUrlById,
+  };
+}
+
 /**
  * RTDB poses may come back as:
  *  - object: { pose_123: "{\"pose\":{...},\"tolerancePct\":69}", ... }
  *  - or already-parsed object in some cases
  *
  * We normalize to:
- *  - poses: { pose_123: <poseObject>, ... }  // what PoseDrawer + matcher expects
- *  - poseTolerancePctById: { pose_123: 69, ... } // optional per-pose tolerance map
+ *  - poses: { pose_123: <poseObject>, ... }
+ *  - poseTolerancePctById: { pose_123: 69, ... }
  */
 function normalizePoses(rawPoses) {
   const poses = {};
@@ -51,7 +117,6 @@ function normalizePoses(rawPoses) {
       try {
         parsed = JSON.parse(raw);
       } catch {
-        // skip invalid JSON
         continue;
       }
     }
@@ -71,8 +136,6 @@ function normalizePoses(rawPoses) {
       poses[poseId] = parsed;
       continue;
     }
-
-    // else: skip
   }
 
   return { poses, poseTolerancePctById };
@@ -95,7 +158,9 @@ function toPlayableLevel(levelId, level) {
   const options = level?.options ?? [];
 
   // ✅ IMPORTANT: normalize RTDB pose JSON strings -> objects
-  const { poses, poseTolerancePctById: tolFromPoses } = normalizePoses(level?.poses ?? {});
+  const { poses, poseTolerancePctById: tolFromPoses } = normalizePoses(
+    level?.poses ?? {}
+  );
 
   // allow explicit map on level to override / extend parsed tolerances
   const tolFromLevel =
@@ -174,6 +239,9 @@ async function fetchGameAndLevels(gameId) {
 
   const { pin, ...safeGame } = game;
 
+  // ✅ NEW: normalize settings so speaker URLs are easy to access in the player
+  const settings = normalizeGameSettings(safeGame.settings ?? {});
+
   return {
     game: {
       id: gameId,
@@ -182,7 +250,7 @@ async function fetchGameAndLevels(gameId) {
       keywords: safeGame.keywords ?? "",
       levelIds,
       storyline: safeGame.storyline ?? [],
-      settings: safeGame.settings ?? {},
+      settings,
     },
     levels,
   };
@@ -194,7 +262,7 @@ export default async function Page({ params, searchParams }) {
 
   const { game, levels } = await fetchGameAndLevels(gameId);
   const levelIndex = level ? Number(level) : 0;
-  
+
   return (
     <GamePlayerClient
       game={game}
