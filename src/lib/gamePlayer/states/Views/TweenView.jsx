@@ -32,8 +32,11 @@ function clampInt(n, { min = 1, max = 999 } = {}) {
   return Math.max(min, Math.min(max, v));
 }
 
-export default function TweenView({ session, node, dispatch, width = 800, height = 600 }) {
+export default function TweenView({ session, node, dispatch }) {
   const showCursor = !!session?.flags?.showCursor;
+
+  const TWEEN_W = 520;
+  const TWEEN_H = 520;
 
   const poseMap = useMemo(() => {
     const level = session?.game?.levels?.[session?.levelIndex] ?? null;
@@ -63,7 +66,6 @@ export default function TweenView({ session, node, dispatch, width = 800, height
   useEffect(() => {
     if (!poses || poses.length < 2) return;
 
-    // if user disables tween cursor, still auto-advance is OK (it's per level behavior)
     const t = window.setTimeout(() => {
       dispatch(commands.next({ source: "auto" }));
     }, totalDurationMS);
@@ -75,17 +77,23 @@ export default function TweenView({ session, node, dispatch, width = 800, height
     <div className="absolute inset-0 z-20 pointer-events-auto">
       <div className="absolute inset-0 bg-black/30" />
 
+      {/* ✅ Tween centered in a fixed-size box */}
       <div className="absolute inset-0 flex items-center justify-center">
         {poses.length >= 2 ? (
-          <Tween
-            key={`tween:${session.playId ?? "p"}:${session.nodeIndex}:${session.tweenPlayIndex ?? 0}`}
-            poses={poses}
-            duration={stepDurationMS}
-            width={width}
-            height={height}
-            loop={true}
-            isPlaying={true}
-          />
+          <div
+            className="rounded-3xl ring-1 ring-white/10 bg-black/20 backdrop-blur-sm"
+            style={{ width: TWEEN_W, height: TWEEN_H }}
+          >
+            <Tween
+              key={`tween:${session?.playId ?? "p"}:${session?.nodeIndex}:${session?.tweenPlayIndex ?? 0}`}
+              poses={poses}
+              duration={stepDurationMS}
+              width={TWEEN_W}
+              height={TWEEN_H}
+              loop={true}
+              isPlaying={true}
+            />
+          </div>
         ) : (
           <div className="text-white/80 text-sm">Tween needs at least 2 poses (got {poses.length}).</div>
         )}
@@ -102,7 +110,7 @@ export default function TweenView({ session, node, dispatch, width = 800, height
             <div className="flex-1 min-w-0">
               <div
                 className="text-white/95 leading-relaxed"
-                style={{ fontSize: session.settings?.ui?.dialogueFontSize ?? 22 }}
+                style={{ fontSize: session?.settings?.ui?.dialogueFontSize ?? 22 }}
               >
                 {poses.length >= 2
                   ? `Animating ${poses.length} poses • ${reps}× (${totalDurationMS} ms total).`

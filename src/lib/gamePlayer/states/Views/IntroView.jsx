@@ -27,20 +27,12 @@ export default function IntroView({ session, node, dispatch }) {
   const idx = session?.dialogueIndex ?? 0;
 
   const rawLine = lines[idx] ?? "";
-
   const line =
-    typeof rawLine === "object" && rawLine !== null
-      ? rawLine.text ?? ""
-      : rawLine;
+    typeof rawLine === "object" && rawLine !== null ? rawLine.text ?? "" : rawLine;
 
   const showCursor = !!session?.flags?.showCursor;
 
-  /* -------------------------------------------------------
-     SPEAKER RESOLUTION (DEFAULT + CUSTOM)
-  ------------------------------------------------------- */
-
   const { speakerName, avatarUrl } = useMemo(() => {
-    // Extract speakerId safely
     let speakerId = null;
 
     if (typeof rawLine === "object" && rawLine !== null) {
@@ -53,10 +45,8 @@ export default function IntroView({ session, node, dispatch }) {
       }
     }
 
-    // 1️⃣ Custom speakers (from game settings)
     const customMap =
-      session?.game?.settings?.speakers &&
-      isPlainObject(session.game.settings.speakers)
+      session?.game?.settings?.speakers && isPlainObject(session.game.settings.speakers)
         ? session.game.settings.speakers
         : {};
 
@@ -67,10 +57,7 @@ export default function IntroView({ session, node, dispatch }) {
       };
     }
 
-    // 2️⃣ Default speakers
-    const defaultSpeaker =
-      DEFAULT_SPEAKERS?.find((s) => s.id === speakerId) ?? null;
-
+    const defaultSpeaker = DEFAULT_SPEAKERS?.find((s) => s.id === speakerId) ?? null;
     if (defaultSpeaker) {
       return {
         speakerName: defaultSpeaker.name,
@@ -78,31 +65,21 @@ export default function IntroView({ session, node, dispatch }) {
       };
     }
 
-    // 3️⃣ Fallback
     return {
-      speakerName:
-        (typeof rawLine === "object" && rawLine?.speakerName) ||
-        "Guide",
+      speakerName: (typeof rawLine === "object" && rawLine?.speakerName) || node?.speaker?.name || "Guide",
       avatarUrl: null,
     };
-  }, [rawLine, session?.game?.settings?.speakers]);
+  }, [rawLine, node?.speaker?.name, session?.game?.settings?.speakers]);
 
   const onNext = () => dispatch(commands.next());
 
-  /* -------------------------------------------------------
-     RENDER
-  ------------------------------------------------------- */
-
   return (
     <div className="absolute inset-0 z-20 pointer-events-auto">
-      {/* Subtle background overlay */}
       <div className="absolute inset-0 bg-black/30" />
 
-      {/* Bottom dialogue bar */}
       <div className="absolute left-0 right-0 bottom-0 p-8">
         <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
           <div className="flex gap-8 items-end">
-            {/* Speaker sprite */}
             <div className="shrink-0">
               {avatarUrl ? (
                 <img
@@ -111,22 +88,15 @@ export default function IntroView({ session, node, dispatch }) {
                   className="h-28 w-28 rounded-3xl object-cover ring-1 ring-white/20"
                 />
               ) : (
-                <DefaultSpeakerSprite
-                  label={String(speakerName || "G").charAt(0).toUpperCase()}
-                />
+                <DefaultSpeakerSprite label={String(speakerName || "G").charAt(0).toUpperCase()} />
               )}
-              <div className="mt-3 text-sm text-white/70 text-center">
-                {speakerName}
-              </div>
+              <div className="mt-3 text-sm text-white/70 text-center">{speakerName}</div>
             </div>
 
-            {/* Dialogue text */}
             <div className="flex-1 min-w-0">
               <div
                 className="text-white/95 leading-relaxed"
-                style={{
-                  fontSize: session?.settings?.ui?.dialogueFontSize ?? 22,
-                }}
+                style={{ fontSize: session?.settings?.ui?.dialogueFontSize ?? 22 }}
               >
                 {line || (lines.length ? "…" : "No intro lines provided.")}
               </div>
@@ -138,7 +108,6 @@ export default function IntroView({ session, node, dispatch }) {
               )}
             </div>
 
-            {/* Next button */}
             <div className="shrink-0 flex flex-col items-end gap-4">
               <div className="p-4">
                 <button
@@ -161,9 +130,7 @@ export default function IntroView({ session, node, dispatch }) {
               </div>
 
               <div className="text-xs text-white/50">
-                {showCursor
-                  ? "Click or hover to continue"
-                  : "Please wait…"}
+                {showCursor ? "Click or hover to continue" : "Please wait…"}
               </div>
             </div>
           </div>
