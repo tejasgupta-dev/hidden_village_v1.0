@@ -7,12 +7,11 @@ export default function Home() {
   const { user, loading, signOut } = useAuth();
 
   const buttons = [
-    { label: "Play Game", href: "/game/play/menu" },
     { label: "Edit Game", href: "/game/edit/menu" },
     { label: "New Game", href: "/game/new" },
+    { label: "Play Game", href: "/game/play/menu" },
     { label: "Edit Level", href: "/level/menu" },
     { label: "New Level", href: "/level/new" },
-    { label: "Settings", href: "/settings" },
   ];
 
   // Add Admin Dashboard button if user is admin
