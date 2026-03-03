@@ -29,7 +29,6 @@ export default function StateRenderer({
           session={session}
           node={node}
           dispatch={dispatch}
-          poseDataRef={poseDataRef}
           width={width}
           height={height}
         />
@@ -41,7 +40,6 @@ export default function StateRenderer({
           session={session}
           node={node}
           dispatch={dispatch}
-          poseDataRef={poseDataRef}
           width={width}
           height={height}
         />
@@ -53,7 +51,6 @@ export default function StateRenderer({
           session={session}
           node={node}
           dispatch={dispatch}
-          poseDataRef={poseDataRef}
           width={width}
           height={height}
         />
@@ -77,7 +74,6 @@ export default function StateRenderer({
           session={session}
           node={node}
           dispatch={dispatch}
-          poseDataRef={poseDataRef}
           width={width}
           height={height}
         />
@@ -89,7 +85,6 @@ export default function StateRenderer({
           session={session}
           node={node}
           dispatch={dispatch}
-          poseDataRef={poseDataRef}
           width={width}
           height={height}
         />

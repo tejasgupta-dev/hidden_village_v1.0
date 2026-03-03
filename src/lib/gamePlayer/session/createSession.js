@@ -28,7 +28,7 @@ const DEFAULT_SETTINGS = {
     intro: true,
     intuition: true,
     tween: true,
-    poseMatch: false,
+    poseMatch: true,
     insight: true,
     outro: true,
   },

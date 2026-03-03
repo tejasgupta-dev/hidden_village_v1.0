@@ -16,7 +16,21 @@ export function createTelemetryBus({
   maxFrames = 60,
   apiBase = "/api",
   includeCredentials = true,
+  enabled = true,
 } = {}) {
+  if (!enabled) {
+    return {
+      playId: playId ?? null,
+      emitEvent() {},
+      recordPoseFrame() {},
+      flushEvents: async () => {},
+      flushFrames: async () => {},
+      flushAll: async () => {},
+      startAutoFlush() {},
+      stopAutoFlush() {},
+      uploadMedia: async () => {},
+    };
+  }
   if (!playId) throw new Error("createTelemetryBus: playId is required");
 
   let events = [];

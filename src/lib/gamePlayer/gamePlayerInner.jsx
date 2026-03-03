@@ -218,13 +218,11 @@ export default function GamePlayerInner({
         const ts = Date.now();
 
         bus.recordPoseFrame({
-          frameType: "POSE",
           seq,
           timestamp: ts,
 
           // separation keys (frame stream)
-          gameId: game?.id ?? null,
-          playId,
+          // NOTE: bus is already tied to playId; keep only what you want in frame stream
           levelId: ctx.levelId ?? null,
           levelIndex: ctx.levelIndex ?? null,
           repIndex: ctx.repIndex ?? 0,
@@ -271,14 +269,20 @@ export default function GamePlayerInner({
           evt?.nodeIndex === 0 &&
           (evt?.reason === "INIT" || evt?.reason === "INIT_MOUNT" || evt?.reason === "INIT_SESSION");
 
-        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter)) continue;
+        // ✅ StrictMode dedupe: only skip init-session boundaries after first mount
+        const isInitLevelStart = evt?.type === "LEVEL_START" && evt?.reason === "INIT_SESSION";
+
+        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter || isInitLevelStart))
+          continue;
 
         if (!evt?.type || !TELEMETRY_ALLOWED.has(evt.type)) continue;
 
         evt = enrichTelemetryEventWithSession(evt, session);
 
         const { type, at, ...payload } = evt || {};
-        bus.emitEvent(type, { ...payload, playId }, at ?? Date.now());
+
+        // ✅ DO NOT add playId/gameId/eventId here; bus stores playId in metadata already
+        bus.emitEvent(type, payload, at ?? Date.now());
         continue;
       }
 
@@ -358,11 +362,11 @@ export default function GamePlayerInner({
       </div>
 
       {/* Pose drawer overlay */}
-      <div className="absolute right-0 top-60 z-[55] pointer-events-none w-1/3 h-screen">
+      <div className="absolute right-6 top-12 z-[55] pointer-events-none">
         <PoseDrawer
           poseData={poseForDrawer}
-          width={Math.floor(width * 0.20)}
-          height={Math.floor(height * 0.40)}
+          width={Math.floor(width * 0.35)}
+          height={Math.floor(height * 0.60)}
           similarityScores={similarityScores}
         />
       </div>

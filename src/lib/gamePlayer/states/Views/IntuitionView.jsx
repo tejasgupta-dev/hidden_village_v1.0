@@ -31,7 +31,7 @@ export default function IntuitionView({ session, node, dispatch }) {
   }, [node?.question]);
 
   const showCursor = !!session?.flags?.showCursor;
-  const [choice, setChoice] = useState(null); // true | false | null
+  const [choice, setChoice] = useState(null);
 
   const trueActive = choice === true;
   const falseActive = choice === false;
@@ -41,18 +41,38 @@ export default function IntuitionView({ session, node, dispatch }) {
   const onPick = (v) => {
     if (!showCursor) return;
     if (choice !== null) return;
+
     setChoice(v);
-    dispatch(commands.next({ source: "intuition", answer: v }));
+
+    // ✅ 1) Log telemetry via reducer command
+    dispatch({
+      type: "COMMAND",
+      name: "TRUE_FALSE_SELECTED",
+      payload: {
+        answer: v,
+        question,
+        at: Date.now(),
+      },
+    });
+
+    // ✅ 2) Advance to next node
+    dispatch(commands.next({ source: "click" }));
   };
 
   const baseCard =
     "next-button relative overflow-hidden w-full rounded-[28px] ring-2 transition-all duration-150 select-none";
-  const activeCard =
-    "bg-white/25 ring-white/60 shadow-[0_0_0_2px_rgba(255,255,255,0.25)]";
+  const activeCard = "bg-white/25 ring-white/60 shadow-[0_0_0_2px_rgba(255,255,255,0.25)]";
   const idleCard = "bg-black/35 ring-white/20 hover:bg-black/25 hover:ring-white/35";
   const disabledCard = "opacity-50 cursor-not-allowed";
 
   const disabled = !showCursor || choice !== null;
+
+  // Reserve space for PoseDrawer (same logic as InsightView)
+  const RIGHT_GUTTER_PCT = 0.40;
+
+  const contentWidthStyle = {
+    width: `calc(${(1 - RIGHT_GUTTER_PCT) * 100}% - 32px)`,
+  };
 
   return (
     <div className="absolute inset-0 z-30 pointer-events-auto">
@@ -60,7 +80,10 @@ export default function IntuitionView({ session, node, dispatch }) {
 
       {/* Top question */}
       <div className="absolute left-0 right-0 top-0 p-8">
-        <div className="mx-auto max-w-5xl rounded-3xl bg-black/60 ring-1 ring-white/15 backdrop-blur-md p-8">
+        <div
+          className="rounded-3xl bg-black/60 ring-1 ring-white/15 backdrop-blur-md p-8"
+          style={contentWidthStyle}
+        >
           <div className="text-white/70 text-sm mb-2">Intuition</div>
 
           <div
@@ -79,9 +102,9 @@ export default function IntuitionView({ session, node, dispatch }) {
         </div>
       </div>
 
-      {/* Big TRUE / FALSE boxes */}
+      {/* TRUE / FALSE boxes */}
       <div className="absolute inset-x-0 top-[200px] bottom-0 p-8">
-        <div className="mx-auto max-w-5xl h-full flex flex-col justify-center gap-6">
+        <div className="h-full flex flex-col justify-center gap-6" style={contentWidthStyle}>
           <button
             type="button"
             onClick={() => onPick(true)}
@@ -95,13 +118,10 @@ export default function IntuitionView({ session, node, dispatch }) {
             ].join(" ")}
           >
             <PoseFillBar />
-
             <div className="relative z-10 flex items-center justify-between gap-6">
               <div>
                 <div className="text-white/95 font-extrabold tracking-wide text-5xl">TRUE</div>
-                <div className="mt-3 text-white/70 text-base">
-                  Select if the statement is correct.
-                </div>
+                <div className="mt-3 text-white/70 text-base">Select if the statement is correct.</div>
               </div>
 
               <div
@@ -129,13 +149,10 @@ export default function IntuitionView({ session, node, dispatch }) {
             ].join(" ")}
           >
             <PoseFillBar />
-
             <div className="relative z-10 flex items-center justify-between gap-6">
               <div>
                 <div className="text-white/95 font-extrabold tracking-wide text-5xl">FALSE</div>
-                <div className="mt-3 text-white/70 text-base">
-                  Select if the statement is incorrect.
-                </div>
+                <div className="mt-3 text-white/70 text-base">Select if the statement is incorrect.</div>
               </div>
 
               <div
@@ -150,12 +167,8 @@ export default function IntuitionView({ session, node, dispatch }) {
             </div>
           </button>
 
-          <div className="text-center text-white/45 text-xs pt-2">
-            {!showCursor
-              ? "Please wait…"
-              : choice === null
-              ? "Hover to select (progress fills), or click."
-              : "Selected — continuing…"}
+          <div className="text-left text-white/45 text-xs pt-2">
+            {!showCursor ? "Please wait…" : choice === null ? "Hover to select (progress fills), or click." : "Selected — continuing…"}
           </div>
         </div>
       </div>

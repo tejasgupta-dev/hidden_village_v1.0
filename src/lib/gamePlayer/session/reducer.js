@@ -42,8 +42,7 @@ function clampPct(v, fallback = 70) {
 
 function getPoseThresholdPctForStep(node, stepIndex, fallback = 70) {
   const arr = Array.isArray(node?.poseTolerances) ? node.poseTolerances : null;
-  const fromArray =
-    arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
+  const fromArray = arr && stepIndex >= 0 && stepIndex < arr.length ? arr[stepIndex] : undefined;
   if (fromArray !== undefined && fromArray !== null && fromArray !== "") {
     return clampPct(fromArray, fallback);
   }
@@ -56,39 +55,15 @@ function getPoseThresholdPctForStep(node, stepIndex, fallback = 70) {
   return fallback;
 }
 
-/* ----------------------------- eventId helpers ----------------------------- */
-
-function baseEventId(session) {
-  const p = session?.playId ?? "noPlay";
-  const g = session?.gameId ?? "noGame";
-  const l = session?.levelId ?? "noLevel";
-  return `${p}:${g}:${l}`;
-}
-
-function withEventId(session, evt) {
-  if (evt?.eventId) return evt;
-
-  const t = evt?.type ?? "UNKNOWN";
-  const ni = evt?.nodeIndex ?? session?.nodeIndex ?? -1;
-  const st = evt?.stateType ?? nodeType(session?.node) ?? "unknown";
-  const di = evt?.dialogueIndex;
-  const si = evt?.stepIndex;
-
-  // ✅ Use repIndex (preferred) or fallback to playIndex (legacy)
-  const ri = evt?.repIndex ?? evt?.playIndex;
-
-  const parts = [baseEventId(session), t, `n${ni}`, `s${st}`];
-  if (di != null) parts.push(`d${di}`);
-  if (si != null) parts.push(`k${si}`);
-  if (ri != null) parts.push(`r${ri}`);
-
-  return { ...evt, eventId: parts.join("|") };
-}
-
+/* ----------------------------- telemetry helpers ----------------------------- */
+/**
+ * ✅ No eventId, no gameId, no playId in event payloads.
+ * Bus/session metadata can carry those separately.
+ */
 function emitTelemetry(session, evt) {
   return pushEffect(session, {
     type: "TELEMETRY_EVENT",
-    event: withEventId(session, evt),
+    event: evt,
   });
 }
 
@@ -106,18 +81,15 @@ export function createInitialSession({ game, initialLevel = 0, playId = null }) 
   session = emitTelemetry(session, {
     type: "SESSION_START",
     at: session.time.now,
-    gameId: session.gameId,
-    playId: session.playId,
   });
 
-  // ✅ Level boundary (ALWAYS)
+  // ✅ Level boundary (ALWAYS) — tag init so GamePlayerInner can dedupe StrictMode
   session = emitTelemetry(session, {
     type: "LEVEL_START",
     at: session.time.now,
-    gameId: session.gameId,
-    playId: session.playId,
     levelId: session.levelId,
     levelIndex: session.levelIndex,
+    reason: "INIT_SESSION",
   });
 
   session = enterNode(session, session.nodeIndex, { reason: "INIT" });
@@ -130,9 +102,7 @@ export function sessionReducer(session, action) {
       return clearEffects(session);
 
     case "TICK": {
-      const now =
-        action.now ??
-        (typeof performance !== "undefined" ? performance.now() : Date.now());
+      const now = action.now ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
 
       if (session.flags?.paused) {
         return {
@@ -173,8 +143,6 @@ export function applyCommand(session, name, payload) {
       return emitTelemetry(next, {
         type: "PAUSE",
         at: next.time.now,
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         nodeIndex: next.nodeIndex,
@@ -193,8 +161,6 @@ export function applyCommand(session, name, payload) {
       next = emitTelemetry(next, {
         type: "RESUME",
         at: next.time.now,
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         nodeIndex: next.nodeIndex,
@@ -218,11 +184,10 @@ export function applyCommand(session, name, payload) {
       const nextSettings = setByPath(session.settings, path, value);
       let next = { ...session, settings: nextSettings };
 
+      // NOTE: not in TELEMETRY_ALLOWED anyway (you can add later if you want)
       next = emitTelemetry(next, {
         type: "SETTING_CHANGED",
         at: next.time.now,
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         nodeIndex: next.nodeIndex,
@@ -245,7 +210,6 @@ export function applyCommand(session, name, payload) {
           answer,
           question: payload?.question ?? null,
           levelId: session.levelId ?? null,
-          gameId: session.gameId ?? null,
           nodeIndex: session.nodeIndex ?? null,
           levelIndex: session.levelIndex ?? null,
           at: payload?.at ?? Date.now(),
@@ -256,9 +220,6 @@ export function applyCommand(session, name, payload) {
         type: "TRUE_FALSE_SELECTED",
         at: next.time.now,
 
-        // ✅ separation keys
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         repIndex: 0,
@@ -279,9 +240,7 @@ export function applyCommand(session, name, payload) {
     /* ---------------------- Insight (option choice) ---------------------- */
 
     case "INSIGHT_OPTION_SELECTED": {
-      const optionIndex = Number.isFinite(Number(payload?.optionIndex))
-        ? Number(payload.optionIndex)
-        : null;
+      const optionIndex = Number.isFinite(Number(payload?.optionIndex)) ? Number(payload.optionIndex) : null;
 
       const optionId = payload?.optionId ?? null;
       const optionText = payload?.optionText ?? payload?.text ?? null;
@@ -304,7 +263,6 @@ export function applyCommand(session, name, payload) {
           value,
           question,
           levelId: session.levelId ?? null,
-          gameId: session.gameId ?? null,
           nodeIndex: session.nodeIndex ?? null,
           levelIndex: session.levelIndex ?? null,
           at: payload?.at ?? Date.now(),
@@ -315,9 +273,6 @@ export function applyCommand(session, name, payload) {
         type: "INSIGHT_OPTION_SELECTED",
         at: next.time.now,
 
-        // ✅ separation keys
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         repIndex: 0,
@@ -344,9 +299,7 @@ export function applyCommand(session, name, payload) {
       const perSegment = Array.isArray(payload?.perSegment) ? payload.perSegment : [];
       const thresholdPct = Number(payload?.thresholdPct ?? 70);
       const targetPoseId = payload?.targetPoseId ?? null;
-      const stepIndex = Number.isFinite(Number(payload?.stepIndex))
-        ? Number(payload.stepIndex)
-        : null;
+      const stepIndex = Number.isFinite(Number(payload?.stepIndex)) ? Number(payload.stepIndex) : null;
 
       const matched = overall >= thresholdPct;
 
@@ -379,6 +332,14 @@ export function applyCommand(session, name, payload) {
 
 function currentNode(session) {
   return session?.nodes?.[session?.nodeIndex] ?? null;
+}
+
+function findNextValidNodeIndex(session, startIndex) {
+  const nodes = Array.isArray(session?.nodes) ? session.nodes : [];
+  for (let i = startIndex; i < nodes.length; i++) {
+    if (nodes[i] != null) return i; // skip null/undefined
+  }
+  return null;
 }
 
 function cursorTag(nodeIndex) {
@@ -439,12 +400,9 @@ function enterNode(session, nodeIndex, { reason } = {}) {
     type: "STATE_ENTER",
     at: next.time.now,
 
-    gameId: next.gameId,
-    playId: next.playId,
     levelId: next.levelId,
     levelIndex: next.levelIndex,
 
-    // ✅ include repIndex for pose match states
     repIndex: t === STATE_TYPES.POSE_MATCH ? (next.poseMatchRoundIndex ?? 0) : 0,
 
     nodeIndex,
@@ -454,10 +412,7 @@ function enterNode(session, nodeIndex, { reason } = {}) {
 
   next = pushEffect(next, {
     type: "POSE_RECORDING_HINT",
-    enabled:
-      t === STATE_TYPES.POSE_MATCH ||
-      t === STATE_TYPES.INSIGHT ||
-      t === STATE_TYPES.INTUITION,
+    enabled: t === STATE_TYPES.POSE_MATCH || t === STATE_TYPES.INSIGHT || t === STATE_TYPES.INTUITION,
     stateType: t,
     nodeIndex,
   });
@@ -478,12 +433,9 @@ function exitNode(session, { reason } = {}) {
     type: "STATE_EXIT",
     at: s.time.now,
 
-    gameId: s.gameId,
-    playId: s.playId,
     levelId: s.levelId,
     levelIndex: s.levelIndex,
 
-    // ✅ include repIndex for pose match states
     repIndex: t === STATE_TYPES.POSE_MATCH ? (s.poseMatchRoundIndex ?? 0) : 0,
 
     nodeIndex: s.nodeIndex,
@@ -495,15 +447,11 @@ function exitNode(session, { reason } = {}) {
 /* ----------------------------- level transitions ----------------------------- */
 
 function restartCurrentLevel(session) {
-  // exit current node so we never miss STATE_EXIT (including OUTRO)
   let s = exitNode(session, { reason: "RESTART_LEVEL" });
 
-  // level end boundary for the current run of the level
   s = emitTelemetry(s, {
     type: "LEVEL_END",
     at: s.time.now,
-    gameId: s.gameId,
-    playId: s.playId,
     levelId: s.levelId,
     levelIndex: s.levelIndex,
     reason: "RESTART_LEVEL",
@@ -511,6 +459,8 @@ function restartCurrentLevel(session) {
 
   const prevStartedAt =
     s?.time?.startedAt ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
+
+  const carriedEffects = Array.isArray(s.effects) ? s.effects : [];
 
   let next = createSession({
     game: s.game,
@@ -529,7 +479,8 @@ function restartCurrentLevel(session) {
       dt: 0,
     },
     timers: [],
-    effects: [],
+    // ✅ DO NOT wipe effects — keep exit/level_end
+    effects: carriedEffects,
     flags: { ...next.flags, paused: false, showPauseMenu: false, showCursor: false },
     poseMatch: null,
     poseMatchRoundIndex: 0,
@@ -539,8 +490,6 @@ function restartCurrentLevel(session) {
   next = emitTelemetry(next, {
     type: "LEVEL_START",
     at: next.time.now,
-    gameId: next.gameId,
-    playId: next.playId,
     levelId: next.levelId,
     levelIndex: next.levelIndex,
     reason: "RESTART_LEVEL",
@@ -559,24 +508,18 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
   const gameLevels = Array.isArray(session?.game?.levels) ? session.game.levels : [];
   const nextLevelIndex = (session.levelIndex ?? 0) + 1;
 
-  // ✅ ALWAYS: level end boundary
   let s = emitTelemetry(session, {
     type: "LEVEL_END",
     at: session.time.now,
-    gameId: session.gameId,
-    playId: session.playId,
     levelId: session.levelId,
     levelIndex: session.levelIndex,
     reason: reason ?? "LEVEL_END",
   });
 
-  // no next level => session ends and we go back to menu
   if (nextLevelIndex >= gameLevels.length) {
     s = emitTelemetry(s, {
       type: "SESSION_END",
       at: s.time.now,
-      gameId: s.gameId,
-      playId: s.playId,
       levelId: s.levelId,
       levelIndex: s.levelIndex,
       reason: reason ?? "GAME_COMPLETE",
@@ -587,6 +530,8 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
 
   const prevStartedAt =
     s?.time?.startedAt ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
+
+  const carriedEffects = Array.isArray(s.effects) ? s.effects : [];
 
   let next = createSession({
     game: s.game,
@@ -600,24 +545,22 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
     time: {
       ...next.time,
       startedAt: prevStartedAt,
-      now: s.time.now,
+      now: s.time.now,       // ✅ keeps timestamps aligned
       elapsed: s.time.elapsed,
       dt: 0,
     },
     timers: [],
-    effects: [],
+    // ✅ preserve STATE_EXIT + LEVEL_END so GamePlayerInner can drain them
+    effects: carriedEffects,
     flags: { ...next.flags, paused: false, showPauseMenu: false, showCursor: false },
     poseMatch: null,
     poseMatchRoundIndex: 0,
     tweenPlayIndex: 0,
   };
 
-  // ✅ ALWAYS: level start boundary
   next = emitTelemetry(next, {
     type: "LEVEL_START",
-    at: next.time.now,
-    gameId: next.gameId,
-    playId: next.playId,
+    at: next.time.now,       // ✅ same timestamp as exit/end
     levelId: next.levelId,
     levelIndex: next.levelIndex,
     reason: "NEXT_LEVEL",
@@ -628,11 +571,10 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
 }
 
 function goNextNode(session, { reason } = {}) {
-  const nextIndex = session.nodeIndex + 1;
+  const nextIndex = findNextValidNodeIndex(session, (session.nodeIndex ?? 0) + 1);
 
-  // End of node list => end level
-  if (nextIndex >= (session.nodes?.length ?? 0)) {
-    // ✅ critical fix: ALWAYS exit current node first (fixes missing OUTRO exit)
+  // No more valid nodes => end level
+  if (nextIndex == null) {
     let s = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
     return advanceToNextLevelOrFinish(s, { reason: reason ?? "LEVEL_COMPLETE" });
   }
@@ -669,12 +611,8 @@ function handleNext(session, payload) {
         s = emitTelemetry(s, {
           type: "DIALOGUE_NEXT",
           at: s.time.now,
-
-          gameId: s.gameId,
-          playId: s.playId,
           levelId: s.levelId,
           levelIndex: s.levelIndex,
-
           nodeIndex: s.nodeIndex,
           stateType: t,
           dialogueIndex: nextDialogueIndex,
@@ -688,12 +626,8 @@ function handleNext(session, payload) {
       let s2 = emitTelemetry(s, {
         type: "DIALOGUE_END",
         at: s.time.now,
-
-        gameId: s.gameId,
-        playId: s.playId,
         levelId: s.levelId,
         levelIndex: s.levelIndex,
-
         nodeIndex: s.nodeIndex,
         stateType: t,
       });
@@ -711,12 +645,8 @@ function handleNext(session, payload) {
     s = emitTelemetry(s, {
       type: "TWEEN_SKIP",
       at: s.time.now,
-
-      gameId: s.gameId,
-      playId: s.playId,
       levelId: s.levelId,
       levelIndex: s.levelIndex,
-
       nodeIndex: s.nodeIndex,
       stateType: t,
       playIndex: s.tweenPlayIndex ?? 0,
@@ -767,8 +697,6 @@ function handleNext(session, payload) {
         type: isManualClick ? "POSE_MATCH_CLICK_NEXT" : "POSE_MATCH_AUTO_NEXT",
         at: out.time.now,
 
-        gameId: out.gameId,
-        playId: out.playId,
         levelId: out.levelId,
         levelIndex: out.levelIndex,
         repIndex: nextRound,
@@ -799,8 +727,6 @@ function handleNext(session, payload) {
         type: isManualClick ? "POSE_MATCH_REP_FINISH_CLICK" : "POSE_MATCH_REP_FINISH_AUTO",
         at: s.time.now,
 
-        gameId: s.gameId,
-        playId: s.playId,
         levelId: s.levelId,
         levelIndex: s.levelIndex,
         repIndex: round,
@@ -831,8 +757,6 @@ function applyTimer(session, timer) {
       return emitTelemetry(next, {
         type: "CURSOR_SHOWN",
         at: next.time.now,
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         nodeIndex: next.nodeIndex,
@@ -852,8 +776,6 @@ function applyTimer(session, timer) {
       return emitTelemetry(next, {
         type: "TWEEN_REPLAY",
         at: next.time.now,
-        gameId: next.gameId,
-        playId: next.playId,
         levelId: next.levelId,
         levelIndex: next.levelIndex,
         nodeIndex: next.nodeIndex,
