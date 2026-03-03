@@ -45,9 +45,7 @@ function normalizeDialogueLines(raw) {
 
         // NEW preferred field
         const speakerId =
-          typeof x.speakerId === "string" && x.speakerId.trim()
-            ? x.speakerId.trim()
-            : null;
+          typeof x.speakerId === "string" && x.speakerId.trim() ? x.speakerId.trim() : null;
 
         // Legacy field support (some older content stored a speaker name string)
         const speaker =
@@ -55,9 +53,7 @@ function normalizeDialogueLines(raw) {
             ? x.speaker.trim()
             : undefined;
 
-        // Return both for compatibility:
-        // - IntroView can prefer speakerId -> sprite map
-        // - Legacy UI can still show speaker name if present
+        // Return both for compatibility
         const out = { text };
         if (speakerId) out.speakerId = speakerId;
         if (speaker) out.speaker = speaker;
@@ -213,7 +209,7 @@ export function buildStateNodesForLevel({
   level: levelInput,
   story: gameInput,
   levelIndex = 0,
-  settings = null, // <-- merged settings from createSession
+  settings = null,
 }) {
   // RTDB: treat as plain objects
   const level = levelInput ?? null;
@@ -246,9 +242,6 @@ export function buildStateNodesForLevel({
   const question = String(level?.question ?? "").trim();
   const hasQuestion = question.length > 0;
 
-  // strict boolean only
-  const trueFalseEnabled = level?.trueFalseEnabled === true;
-
   const optionsRaw = level?.options ?? null;
   const options = normalizeOptions(optionsRaw);
   const hasOptions = options.length >= 1;
@@ -256,17 +249,13 @@ export function buildStateNodesForLevel({
   // eslint-disable-next-line no-console
   console.log("[builder] question:", question, "hasQuestion:", hasQuestion);
   // eslint-disable-next-line no-console
-  console.log("[builder] trueFalseEnabled:", trueFalseEnabled);
-  // eslint-disable-next-line no-console
   console.log("[builder] options.length:", options.length);
 
-  // INTUITION only if enabled + question exists + trueFalseEnabled
-  if (getStateEnabled({ level, settings }, "intuition", true) && hasQuestion && trueFalseEnabled) {
+  // INTUITION only if enabled + question exists
+  if (getStateEnabled({ level, settings }, "intuition", true) && hasQuestion) {
     nodes.push({
       type: STATE_TYPES.INTUITION,
       question,
-      trueFalseEnabled: true,
-      trueFalseAnswer: typeof level?.trueFalseAnswer === "boolean" ? level.trueFalseAnswer : null,
       cursorDelayMS: resolveCursorDelayMS({ storyLevel, level }, STATE_TYPES.POSE_MATCH),
       levelId,
       gameId,

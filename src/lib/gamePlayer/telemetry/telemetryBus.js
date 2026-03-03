@@ -16,7 +16,7 @@ export function createTelemetryBus({
   maxFrames = 60,
   apiBase = "/api",
   includeCredentials = true,
-  enabled = false,
+  enabled = true,
 } = {}) {
   if (!enabled) {
     return {
