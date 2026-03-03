@@ -218,7 +218,6 @@ export default function GamePlayerInner({
         const ts = Date.now();
 
         bus.recordPoseFrame({
-          frameType: "POSE",
           seq,
           timestamp: ts,
 
