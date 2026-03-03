@@ -223,8 +223,7 @@ export default function GamePlayerInner({
           timestamp: ts,
 
           // separation keys (frame stream)
-          gameId: game?.id ?? null,
-          playId,
+          // NOTE: bus is already tied to playId; keep only what you want in frame stream
           levelId: ctx.levelId ?? null,
           levelIndex: ctx.levelIndex ?? null,
           repIndex: ctx.repIndex ?? 0,
@@ -271,14 +270,20 @@ export default function GamePlayerInner({
           evt?.nodeIndex === 0 &&
           (evt?.reason === "INIT" || evt?.reason === "INIT_MOUNT" || evt?.reason === "INIT_SESSION");
 
-        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter)) continue;
+        // ✅ StrictMode dedupe: only skip init-session boundaries after first mount
+        const isInitLevelStart = evt?.type === "LEVEL_START" && evt?.reason === "INIT_SESSION";
+
+        if (startupAlreadySent && (evt?.type === "SESSION_START" || isInitEnter || isInitLevelStart))
+          continue;
 
         if (!evt?.type || !TELEMETRY_ALLOWED.has(evt.type)) continue;
 
         evt = enrichTelemetryEventWithSession(evt, session);
 
         const { type, at, ...payload } = evt || {};
-        bus.emitEvent(type, { ...payload, playId }, at ?? Date.now());
+
+        // ✅ DO NOT add playId/gameId/eventId here; bus stores playId in metadata already
+        bus.emitEvent(type, payload, at ?? Date.now());
         continue;
       }
 
