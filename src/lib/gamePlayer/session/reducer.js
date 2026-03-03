@@ -334,6 +334,14 @@ function currentNode(session) {
   return session?.nodes?.[session?.nodeIndex] ?? null;
 }
 
+function findNextValidNodeIndex(session, startIndex) {
+  const nodes = Array.isArray(session?.nodes) ? session.nodes : [];
+  for (let i = startIndex; i < nodes.length; i++) {
+    if (nodes[i] != null) return i; // skip null/undefined
+  }
+  return null;
+}
+
 function cursorTag(nodeIndex) {
   return `cursorDelay:${nodeIndex}`;
 }
@@ -439,10 +447,8 @@ function exitNode(session, { reason } = {}) {
 /* ----------------------------- level transitions ----------------------------- */
 
 function restartCurrentLevel(session) {
-  // exit current node so we never miss STATE_EXIT (including OUTRO)
   let s = exitNode(session, { reason: "RESTART_LEVEL" });
 
-  // level end boundary for the current run of the level
   s = emitTelemetry(s, {
     type: "LEVEL_END",
     at: s.time.now,
@@ -453,6 +459,8 @@ function restartCurrentLevel(session) {
 
   const prevStartedAt =
     s?.time?.startedAt ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
+
+  const carriedEffects = Array.isArray(s.effects) ? s.effects : [];
 
   let next = createSession({
     game: s.game,
@@ -471,7 +479,8 @@ function restartCurrentLevel(session) {
       dt: 0,
     },
     timers: [],
-    effects: [],
+    // ✅ DO NOT wipe effects — keep exit/level_end
+    effects: carriedEffects,
     flags: { ...next.flags, paused: false, showPauseMenu: false, showCursor: false },
     poseMatch: null,
     poseMatchRoundIndex: 0,
@@ -499,7 +508,6 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
   const gameLevels = Array.isArray(session?.game?.levels) ? session.game.levels : [];
   const nextLevelIndex = (session.levelIndex ?? 0) + 1;
 
-  // ✅ ALWAYS: level end boundary
   let s = emitTelemetry(session, {
     type: "LEVEL_END",
     at: session.time.now,
@@ -508,7 +516,6 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
     reason: reason ?? "LEVEL_END",
   });
 
-  // no next level => session ends and we go back to menu
   if (nextLevelIndex >= gameLevels.length) {
     s = emitTelemetry(s, {
       type: "SESSION_END",
@@ -524,6 +531,8 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
   const prevStartedAt =
     s?.time?.startedAt ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
 
+  const carriedEffects = Array.isArray(s.effects) ? s.effects : [];
+
   let next = createSession({
     game: s.game,
     playId: s.playId,
@@ -536,22 +545,22 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
     time: {
       ...next.time,
       startedAt: prevStartedAt,
-      now: s.time.now,
+      now: s.time.now,       // ✅ keeps timestamps aligned
       elapsed: s.time.elapsed,
       dt: 0,
     },
     timers: [],
-    effects: [],
+    // ✅ preserve STATE_EXIT + LEVEL_END so GamePlayerInner can drain them
+    effects: carriedEffects,
     flags: { ...next.flags, paused: false, showPauseMenu: false, showCursor: false },
     poseMatch: null,
     poseMatchRoundIndex: 0,
     tweenPlayIndex: 0,
   };
 
-  // ✅ ALWAYS: level start boundary
   next = emitTelemetry(next, {
     type: "LEVEL_START",
-    at: next.time.now,
+    at: next.time.now,       // ✅ same timestamp as exit/end
     levelId: next.levelId,
     levelIndex: next.levelIndex,
     reason: "NEXT_LEVEL",
@@ -562,11 +571,10 @@ function advanceToNextLevelOrFinish(session, { reason } = {}) {
 }
 
 function goNextNode(session, { reason } = {}) {
-  const nextIndex = session.nodeIndex + 1;
+  const nextIndex = findNextValidNodeIndex(session, (session.nodeIndex ?? 0) + 1);
 
-  // End of node list => end level
-  if (nextIndex >= (session.nodes?.length ?? 0)) {
-    // ✅ critical fix: ALWAYS exit current node first (fixes missing OUTRO exit)
+  // No more valid nodes => end level
+  if (nextIndex == null) {
     let s = exitNode(session, { reason: reason ?? "LEVEL_COMPLETE" });
     return advanceToNextLevelOrFinish(s, { reason: reason ?? "LEVEL_COMPLETE" });
   }
