@@ -358,11 +358,11 @@ export default function GamePlayerInner({
       </div>
 
       {/* Pose drawer overlay */}
-      <div className="absolute right-0 top-60 z-[55] pointer-events-none w-1/3 h-screen">
+      <div className="absolute right-6 top-12 z-[55] pointer-events-none">
         <PoseDrawer
           poseData={poseForDrawer}
-          width={Math.floor(width * 0.20)}
-          height={Math.floor(height * 0.40)}
+          width={Math.floor(width * 0.35)}
+          height={Math.floor(height * 0.60)}
           similarityScores={similarityScores}
         />
       </div>

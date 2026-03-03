@@ -247,19 +247,19 @@ export default function PoseMatchView({
     <div className="absolute inset-0 z-20 pointer-events-auto">
       <div className="absolute inset-0 bg-black/30" />
 
-      <div className="absolute inset-0 flex items-center justify-center">
-        <div className="rounded-3xl bg-black/40 ring-1 ring-white/10 p-4">
-          {targetPose ? (
-            <PoseDrawer
-              poseData={targetPose}
-              width={Math.min(520, Math.floor(width * 0.55))}
-              height={Math.min(700, Math.floor(height * 0.85))}
-              similarityScores={drawerScores}
-            />
-          ) : (
-            <div className="text-white/80 text-sm">No target pose available.</div>
-          )}
-        </div>
+      <div
+        className="absolute left-1/3 top-16 z-30 -translate-x-1/2 rounded-3xl bg-black/40 ring-1 ring-white/10 p-4"
+      >
+        {targetPose ? (
+          <PoseDrawer
+            poseData={targetPose}
+            width={Math.floor(width * 0.35)}
+            height={Math.floor(height * 0.60)}
+            similarityScores={drawerScores}
+          />
+        ) : (
+          <div className="text-white/80 text-sm">No target pose available.</div>
+        )}
       </div>
 
       <div className="absolute left-0 right-0 bottom-0 p-8">

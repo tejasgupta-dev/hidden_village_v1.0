@@ -1,3 +1,4 @@
+// src/lib/gamePlayer/states/Views/InsightView.jsx
 "use client";
 
 import { useMemo, useState } from "react";
@@ -99,6 +100,10 @@ export default function InsightView({ session, node, dispatch }) {
   const hasOptions = options.length > 0;
   const { cols } = useMemo(() => gridConfig(options.length), [options.length]);
 
+  // Reserve space for the live PoseDrawer on the right
+  // PoseDrawer is ~35% screen width; reserve a bit more for padding.
+  const RIGHT_GUTTER_PCT = 0.40;
+
   // you can tune these per-state if you want
   const OPTION_HOVER_MS = 900;
   const NEXT_HOVER_MS = 700;
@@ -137,13 +142,21 @@ export default function InsightView({ session, node, dispatch }) {
 
   const fontSize = session?.settings?.ui?.dialogueFontSize ?? 22;
 
+  // Shared style for main content blocks so they don't sit under PoseDrawer
+  const contentWidthStyle = {
+    width: `calc(${(1 - RIGHT_GUTTER_PCT) * 100}% - 32px)`,
+  };
+
   return (
     <div className="absolute inset-0 z-30 pointer-events-auto">
       <div className="absolute inset-0 bg-black/35" />
 
       {/* Top bar */}
       <div className="absolute left-0 right-0 top-0 p-8">
-        <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8">
+        <div
+          className="rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-8"
+          style={contentWidthStyle}
+        >
           <div className="text-white/60 text-sm">Insight</div>
 
           {question ? (
@@ -174,7 +187,7 @@ export default function InsightView({ session, node, dispatch }) {
       {/* Options grid */}
       {hasOptions ? (
         <div className="absolute inset-x-0 top-[220px] bottom-0 p-8">
-          <div className="mx-auto max-w-6xl h-full">
+          <div className="h-full" style={contentWidthStyle}>
             <div
               className="h-full grid"
               style={{
@@ -230,7 +243,10 @@ export default function InsightView({ session, node, dispatch }) {
       ) : (
         // Bottom controls (no options)
         <div className="absolute left-0 right-0 bottom-0 p-8">
-          <div className="mx-auto max-w-6xl rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-6">
+          <div
+            className="rounded-3xl bg-black/70 ring-1 ring-white/15 backdrop-blur-md p-6"
+            style={contentWidthStyle}
+          >
             <div className="flex items-center justify-end gap-4">
               <button
                 type="button"

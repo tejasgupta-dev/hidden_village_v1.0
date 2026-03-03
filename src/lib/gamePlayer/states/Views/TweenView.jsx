@@ -1,3 +1,4 @@
+// src/lib/gamePlayer/states/tweenView.jsx
 "use client";
 
 import { useEffect, useMemo } from "react";
@@ -32,11 +33,18 @@ function clampInt(n, { min = 1, max = 999 } = {}) {
   return Math.max(min, Math.min(max, v));
 }
 
-export default function TweenView({ session, node, dispatch }) {
+export default function TweenView({
+  session,
+  node,
+  dispatch,
+  width = 800,
+  height = 600,
+}) {
   const showCursor = !!session?.flags?.showCursor;
 
-  const TWEEN_W = 520;
-  const TWEEN_H = 520;
+  // Match PoseDrawer sizing behavior: same proportions as your live PoseDrawer
+  const TWEEN_W = Math.floor(width * 0.35);
+  const TWEEN_H = Math.floor(height * 0.60);
 
   const poseMap = useMemo(() => {
     const level = session?.game?.levels?.[session?.levelIndex] ?? null;
@@ -77,11 +85,10 @@ export default function TweenView({ session, node, dispatch }) {
     <div className="absolute inset-0 z-20 pointer-events-auto">
       <div className="absolute inset-0 bg-black/30" />
 
-      {/* ✅ Tween centered in a fixed-size box */}
-      <div className="absolute inset-0 flex items-center justify-center">
+      <div className="absolute left-1/3 top-24 z-30 -translate-x-1/2">
         {poses.length >= 2 ? (
           <div
-            className="rounded-3xl ring-1 ring-white/10 bg-black/20 backdrop-blur-sm"
+            className="rounded-3xl ring-1 ring-white/10 bg-black/20 backdrop-blur-sm overflow-hidden"
             style={{ width: TWEEN_W, height: TWEEN_H }}
           >
             <Tween
@@ -143,7 +150,9 @@ export default function TweenView({ session, node, dispatch }) {
                 </button>
               </div>
 
-              <div className="text-xs text-white/50">{showCursor ? "Click to continue" : "Please wait…"}</div>
+              <div className="text-xs text-white/50">
+                {showCursor ? "Click to continue" : "Please wait…"}
+              </div>
             </div>
           </div>
         </div>
